@@ -62,6 +62,17 @@ fn doctor_reports_platform() {
 }
 
 #[test]
+fn completions_generates_a_script_for_each_supported_shell() {
+    for shell in ["bash", "zsh", "fish", "elvish", "powershell"] {
+        confinery()
+            .args(["completions", shell])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("confinery"));
+    }
+}
+
+#[test]
 fn init_emits_named_template() {
     confinery()
         .args(["init", "strict"])

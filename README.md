@@ -108,10 +108,11 @@ Built-in templates: `assistant`, `strict`, `dev`, `minimal` (`confinery init <na
 ## Commands
 
 ```
-confinery run      run a command inside a sandbox
-confinery doctor   report host isolation capabilities
-confinery profile  validate | show | list
-confinery init     write a starter profile
+confinery run          run a command inside a sandbox
+confinery doctor       report host isolation capabilities
+confinery profile      validate | show | list
+confinery init         write a starter profile
+confinery completions  print a shell completion script (bash, zsh, fish, elvish, powershell)
 ```
 
 `confinery run` returns the sandboxed process's own exit code, so it drops cleanly into scripts and CI.

@@ -4,7 +4,8 @@ mod cli;
 mod commands;
 mod templates;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 
 use cli::{Cli, Command};
 use confinery_core::logging;
@@ -19,6 +20,12 @@ fn main() {
         Command::Profile(command) => commands::profile::run(command),
         Command::Doctor => commands::doctor::run(),
         Command::Init(args) => commands::init::run(args),
+        Command::Completions { shell } => {
+            let mut app = Cli::command();
+            let name = app.get_name().to_string();
+            generate(shell, &mut app, name, &mut std::io::stdout());
+            Ok(0)
+        }
     };
 
     match result {

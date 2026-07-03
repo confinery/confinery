@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 /// Securely sandbox ("confinery") AI assistants and the tools they run.
 #[derive(Debug, Parser)]
@@ -34,6 +35,15 @@ pub enum Command {
 
     /// Write a starter profile to a file or stdout.
     Init(InitArgs),
+
+    /// Print a shell completion script to stdout.
+    ///
+    /// e.g. `confinery completions bash > /etc/bash_completion.d/confinery`
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[derive(Debug, Args)]
