@@ -1,0 +1,38 @@
+# Maximum isolation: no network, minimal filesystem, seccomp allowlist.
+# Good for running untrusted code or a tool you do not fully trust.
+
+name = "strict"
+description = "Maximum isolation: no network, minimal filesystem, seccomp allowlist"
+
+[filesystem]
+read_only = ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl", "/etc/ca-certificates"]
+read_write = ["./workspace"]
+tmpfs = ["/tmp"]
+deny = ["~/.ssh", "~/.aws", "~/.gnupg", "/etc/shadow"]
+
+[network]
+mode = "none"
+
+[resources]
+memory = "1GiB"
+cpu = 1
+pids = 128
+open_files = 512
+timeout = "5m"
+
+[syscalls]
+# Allowlist mode: only the curated interpreter/tool syscalls are permitted;
+# anything else is killed.
+default = "errno"
+preset = "assistant"
+block_action = "kill"
+
+[capabilities]
+keep = []
+
+[env]
+mode = "allowlist"
+allow = ["PATH", "HOME", "LANG", "TERM"]
+
+[tools]
+allow = ["python3", "node", "bash", "sh", "cat", "ls"]

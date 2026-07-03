@@ -1,0 +1,48 @@
+# Balanced sandbox for an AI coding assistant working inside a project.
+# Copy this file, adjust the paths, and run:  confinery run --profile assistant.toml -- <tool>
+
+name = "assistant"
+description = "Balanced sandbox for an AI coding assistant working in a project"
+
+[filesystem]
+read_only = [
+    "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf",
+]
+read_write = ["./"]
+tmpfs = ["/tmp"]
+deny = [
+    "~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh",
+    "~/.kube", "~/.docker/config.json", "/etc/shadow",
+]
+
+[network]
+# Assistants usually need to reach a model API. Set to "none" for offline work.
+mode = "full"
+
+[resources]
+memory = "4GiB"
+cpu = 4
+pids = 1024
+open_files = 4096
+timeout = "30m"
+
+[syscalls]
+# Allow everything except the curated dangerous set (mount, ptrace, bpf, ...).
+default = "allow"
+preset = "hardened"
+block_action = "errno"
+
+[capabilities]
+keep = []
+
+[env]
+mode = "allowlist"
+allow = [
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "TZ", "TMPDIR",
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+]
+
+[tools]
+# Empty means any executable is allowed. List basenames to restrict.
+allow = []

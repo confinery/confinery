@@ -1,0 +1,40 @@
+# Developer sandbox: writable project tree, loopback network, generous limits.
+# Handy for builds and test suites that should not touch the wider system.
+
+name = "dev"
+description = "Developer sandbox: writable project, loopback network, generous limits"
+
+[filesystem]
+read_only = [
+    "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf",
+]
+read_write = ["./", "~/.cache"]
+tmpfs = ["/tmp"]
+deny = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.docker/config.json"]
+
+[network]
+# Loopback is up, but there is no route off the host.
+mode = "loopback"
+
+[resources]
+memory = "8GiB"
+cpu = 8
+pids = 2048
+open_files = 8192
+timeout = "1h"
+
+[syscalls]
+default = "allow"
+preset = "hardened"
+block_action = "errno"
+
+[capabilities]
+keep = []
+
+[env]
+mode = "allowlist"
+allow = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "TZ", "TMPDIR", "CARGO_HOME", "RUSTUP_HOME"]
+
+[tools]
+allow = []

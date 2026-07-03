@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p confinery-cli
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          name="confinery-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/confinery" "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          tar -C dist -czf "$name.tar.gz" "$name"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "confinery-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/confinery.exe" "dist/$name/"
+          Copy-Item LICENSE, README.md "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "$name.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: confinery-${{ matrix.target }}
+          path: |
+            confinery-*.tar.gz
+            confinery-*.zip
+          if-no-files-found: error
+
+  release:
+    name: sign and publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Collect artifacts and checksums
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          (cd release && sha256sum * > SHA256SUMS)
+          ls -la release
+
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign artifacts (keyless)
+        shell: bash
+        run: |
+          cd release
+          for f in *.tar.gz *.zip SHA256SUMS; do
+            [ -e "$f" ] || continue
+            cosign sign-blob --yes "$f" \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem"
+          done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/*.tar.gz
+            release/*.zip
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release/*.tar.gz
+            release/*.zip
+            release/*.sig
+            release/*.pem
+            release/SHA256SUMS
+          generate_release_notes: true
