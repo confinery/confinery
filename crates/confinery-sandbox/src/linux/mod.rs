@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use confinery_core::audit::{AuditEvent, Auditor};
 use confinery_core::network::NetworkMode;
-use confinery_core::profile::expand_home;
+use confinery_core::profile::{expand_home, resolve_relative};
 use nix::fcntl::OFlag;
 use nix::unistd::{getgid, getuid};
 use seccompiler::BpfProgram;
@@ -98,15 +98,15 @@ impl Sandbox for LinuxSandbox {
         };
 
         let mount_plan = MountPlan {
-            read_only: expand_all(&profile.filesystem.read_only, &home),
-            read_write: expand_all(&profile.filesystem.read_write, &home),
-            tmpfs: expand_all(&profile.filesystem.tmpfs, &home),
-            deny: expand_all(&profile.filesystem.deny, &home),
+            read_only: expand_all(&profile.filesystem.read_only, &home, &workdir),
+            read_write: expand_all(&profile.filesystem.read_write, &home, &workdir),
+            tmpfs: expand_all(&profile.filesystem.tmpfs, &home, &workdir),
+            deny: expand_all(&profile.filesystem.deny, &home, &workdir),
             minimal_dev: profile.filesystem.minimal_dev,
             workdir: workdir.clone(),
         };
 
-        let landlock_plan = LandlockPlan::from_policy(&profile.filesystem, &home);
+        let landlock_plan = LandlockPlan::from_policy(&profile.filesystem, &home, &workdir);
         let rlimit_plan = RlimitPlan::from_limits(&profile.resources);
         let cap_plan = CapPlan::from_policy(&profile.capabilities)?;
         let seccomp_prog: Option<BpfProgram> = seccomp::compile(&profile.syscalls)?;
@@ -420,8 +420,11 @@ fn set_no_new_privs() -> io::Result<()> {
     }
 }
 
-fn expand_all(paths: &[PathBuf], home: &Path) -> Vec<PathBuf> {
-    paths.iter().map(|p| expand_home(p, home)).collect()
+fn expand_all(paths: &[PathBuf], home: &Path, workdir: &Path) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .map(|p| resolve_relative(&expand_home(p, home), workdir))
+        .collect()
 }
 
 fn hostname_for(name: &str) -> String {

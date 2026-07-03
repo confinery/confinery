@@ -144,6 +144,27 @@ pub fn expand_home(path: &Path, home: &Path) -> PathBuf {
     }
 }
 
+/// Resolve a profile path (after `~` expansion) to an absolute one, anchored
+/// at `workdir` if it's still relative.
+///
+/// Every backend needs this: a bind-mount target built from an unresolved
+/// relative path such as `./` does not error, but does not do what a
+/// profile author means by it either. `Path::join`/the mount(2) syscall
+/// both treat a bare `.` component as "here", so mounting a relative
+/// `read_write` entry lands the caller's whole working directory *at the
+/// sandbox's root* instead of as a subtree within it -- silently shadowing
+/// every previously bound `read_only` path (`/usr`, `/bin`, ...) rather
+/// than failing loudly. `read_write = ["./"]` is the exact form used in
+/// every shipped profile template and the README's own example, so this
+/// isn't a hypothetical edge case.
+pub fn resolve_relative(path: &Path, workdir: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workdir.join(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

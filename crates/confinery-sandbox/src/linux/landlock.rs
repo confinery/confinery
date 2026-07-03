@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use confinery_core::filesystem::FilesystemPolicy;
-use confinery_core::profile::expand_home;
+use confinery_core::profile::{expand_home, resolve_relative};
 use landlock::{
     Access, AccessFs, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
     RulesetCreated, RulesetCreatedAttr, RulesetStatus, ABI,
@@ -31,9 +31,10 @@ pub struct LandlockPlan {
 }
 
 impl LandlockPlan {
-    /// Build a plan from the filesystem policy, expanding `~`.
-    pub fn from_policy(policy: &FilesystemPolicy, home: &Path) -> Self {
-        let expand = |p: &PathBuf| expand_home(p, home);
+    /// Build a plan from the filesystem policy, expanding `~` and resolving
+    /// any still-relative path (e.g. `./`) against `workdir`.
+    pub fn from_policy(policy: &FilesystemPolicy, home: &Path, workdir: &Path) -> Self {
+        let expand = |p: &PathBuf| resolve_relative(&expand_home(p, home), workdir);
         let mut read_only: Vec<PathBuf> = policy.read_only.iter().map(expand).collect();
         // procfs and sysfs are needed by most runtimes for read access.
         read_only.push(PathBuf::from("/proc"));
@@ -108,9 +109,23 @@ mod tests {
             read_write: vec![PathBuf::from("~/work")],
             ..Default::default()
         };
-        let plan = LandlockPlan::from_policy(&policy, Path::new("/home/u"));
+        let plan = LandlockPlan::from_policy(&policy, Path::new("/home/u"), Path::new("/work"));
         assert!(plan.read_write.contains(&PathBuf::from("/home/u/work")));
         // tmpfs folded into writable set.
         assert!(plan.read_write.contains(&PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn resolves_relative_paths_against_workdir() {
+        let policy = FilesystemPolicy {
+            read_write: vec![PathBuf::from("./")],
+            ..Default::default()
+        };
+        let plan = LandlockPlan::from_policy(&policy, Path::new("/home/u"), Path::new("/proj"));
+        assert!(
+            plan.read_write.contains(&PathBuf::from("/proj/./")),
+            "{:?}",
+            plan.read_write
+        );
     }
 }

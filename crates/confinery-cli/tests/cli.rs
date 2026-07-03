@@ -360,3 +360,56 @@ fn read_only_paths_reject_writes() {
     let contents = std::fs::read_to_string(&target).unwrap();
     assert_eq!(contents, "original");
 }
+
+// Regression test for the relative-path resolution fix: `read_write = ["./"]`
+// -- the exact form used in every shipped profile template and the README's
+// own example -- must expose the working directory as a subtree of the
+// sandbox, not bind it directly onto the sandbox root. Before the fix, an
+// unresolved "./" bind-mounted the caller's whole working directory over
+// the sandbox's entire root, silently shadowing every previously-bound
+// `read_only` path (so `/usr`, `/bin`, etc. simply disappeared) -- and,
+// verified manually while diagnosing this, calls that create directories
+// relative to what they believed was the sandbox's internal staging area
+// (`setup_dev`/`setup_proc`) ended up creating real, persistent `dev/`,
+// `proc/`, and `tmp/` directories *inside the real project directory on
+// the host*, because the staging path and the bind-mounted working
+// directory had become the same underlying location.
+#[cfg(target_os = "linux")]
+#[test]
+fn relative_read_write_exposes_workdir_without_shadowing_the_root() {
+    if !namespaces_available() {
+        eprintln!("skipping: isolate (namespace) mode unavailable on this host");
+        return;
+    }
+    let dir = non_tmp_tempdir();
+    std::fs::write(dir.path().join("marker.txt"), "project-file").unwrap();
+
+    let profile = "name = \"relative-rw-test\"\n\
+         [filesystem]\n\
+         read_only = [\"/usr\", \"/bin\", \"/lib\", \"/lib64\"]\n\
+         read_write = [\"./\"]\n\
+         [network]\n\
+         mode = \"none\"\n";
+    let path = write_profile(&dir, "relative.toml", profile);
+
+    // /usr must still be visible: the working directory must be a subtree,
+    // not a replacement, of the sandbox root.
+    confinery()
+        .current_dir(dir.path())
+        .args(["run", "--isolation", "namespaces", "--profile"])
+        .arg(&path)
+        .args(["--", "sh", "-c", "ls /usr >/dev/null && cat marker.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-file"));
+
+    // And the host's real working directory must come out of this
+    // completely unpolluted -- no stray `dev`/`proc`/`tmp` directories
+    // materializing next to the profile and marker file.
+    for name in ["dev", "proc", "tmp"] {
+        assert!(
+            !dir.path().join(name).exists(),
+            "host workdir was polluted with a `{name}` directory"
+        );
+    }
+}

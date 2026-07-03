@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use confinery_core::syscalls::{SeccompAction as PolicyAction, SyscallPolicy, SyscallPreset};
-use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};
+use seccompiler::{
+    BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+    SeccompRule, TargetArch,
+};
 
 use super::syscall_table;
 use crate::error::{Result, SandboxError};
@@ -64,6 +67,7 @@ fn allowlist_rules(policy: &SyscallPolicy) -> Result<(Rules, SeccompAction, Secc
             return Err(SandboxError::UnknownSyscall(name.clone()));
         }
     }
+    guard_clone_against_new_user_namespace(&mut rules, true)?;
 
     Ok((rules, action(policy.default), SeccompAction::Allow))
 }
@@ -87,8 +91,64 @@ fn denylist_rules(policy: &SyscallPolicy) -> Result<(Rules, SeccompAction, Secco
             None => {}
         }
     }
+    guard_clone_against_new_user_namespace(&mut rules, false)?;
 
     Ok((rules, SeccompAction::Allow, action(policy.block_action)))
+}
+
+/// Block `clone(2)` calls that request `CLONE_NEWUSER`, i.e. creating a
+/// nested user namespace, without disturbing ordinary thread/process
+/// creation (which does not set that flag).
+///
+/// This is defense in depth, not a load-bearing boundary: every syscall a
+/// nested namespace's "root" could actually abuse (`mount`, `pivot_root`,
+/// `ptrace`, ...) is already blocked unconditionally by the `hardened`
+/// denylist regardless of which namespace the caller sits in, since
+/// seccomp filters apply to the syscall itself, not the caller's
+/// capabilities. But nested unprivileged user namespaces are a
+/// long-running source of *kernel* privilege-escalation bugs (extra code
+/// paths reachable only with a fresh namespace's ambient capabilities), so
+/// shrinking that surface further is worthwhile.
+///
+/// Deliberately does not attempt the same for `clone3(2)`: seccomp-BPF can
+/// only compare raw syscall *arguments* (registers), and `clone3`'s flags
+/// live inside a `struct clone_args` behind a pointer -- reading through
+/// that pointer to filter on its contents is exactly what seccomp-BPF
+/// cannot do. Blocking `clone3` outright would be safe today (glibc/musl
+/// both still fall back to `clone` when it's unavailable) but is a
+/// meaningfully different, coarser tradeoff than this targeted guard, so
+/// it's left alone rather than folded in silently.
+fn guard_clone_against_new_user_namespace(rules: &mut Rules, is_allowlist: bool) -> Result<()> {
+    let Some(clone_num) = syscall_table::resolve("clone") else {
+        return Ok(());
+    };
+    // Only add the guard where `clone` would otherwise be an unconditional
+    // match (an empty rule list): if it already has conditions (not done by
+    // this module today) or isn't present at all in denylist mode, leave it
+    // alone rather than second-guess an existing, more specific rule.
+    let should_guard = match rules.get(&clone_num) {
+        Some(existing) => existing.is_empty(),
+        None => !is_allowlist,
+    };
+    if !should_guard {
+        return Ok(());
+    }
+
+    // MaskedEq(mask) matches when `argument & mask == value`. `value` is
+    // the mask itself for "the bit is set", or 0 for "the bit is clear".
+    let newuser_bit = u64::try_from(libc::CLONE_NEWUSER).unwrap_or(0);
+    let match_value = if is_allowlist { 0 } else { newuser_bit };
+    let condition = SeccompCondition::new(
+        0,
+        SeccompCmpArgLen::Qword,
+        SeccompCmpOp::MaskedEq(newuser_bit),
+        match_value,
+    )
+    .map_err(|e| SandboxError::layer("seccomp", format!("clone guard condition: {e}")))?;
+    let rule = SeccompRule::new(vec![condition])
+        .map_err(|e| SandboxError::layer("seccomp", format!("clone guard rule: {e}")))?;
+    rules.insert(clone_num, vec![rule]);
+    Ok(())
 }
 
 fn action(a: PolicyAction) -> SeccompAction {
