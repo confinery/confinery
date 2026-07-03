@@ -81,5 +81,5 @@ jobs:
         working-directory: crates/confinery-core
         run: |
           for target in profile_toml profile_json units; do
-            cargo fuzz run "$target" -- -max_total_time=30
+            cargo +nightly fuzz run "$target" -- -max_total_time=30
           done
