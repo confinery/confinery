@@ -21,6 +21,7 @@ mod seccomp;
 mod syscall_table;
 
 use std::io;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -32,6 +33,7 @@ use std::time::{Duration, Instant};
 use confinery_core::audit::{AuditEvent, Auditor};
 use confinery_core::network::NetworkMode;
 use confinery_core::profile::expand_home;
+use nix::fcntl::OFlag;
 use nix::unistd::{getgid, getuid};
 use seccompiler::BpfProgram;
 
@@ -212,6 +214,22 @@ impl Sandbox for LinuxSandbox {
         cmd.args(&spec.command[1..]);
         crate::common::apply_env(&mut cmd, &profile.env);
 
+        // Rust's `pre_exec` can only carry a bare OS error code back across
+        // the fork boundary: if the closure returns anything other than a
+        // raw-errno `io::Error`, the detail is discarded and the parent sees
+        // a generic, unhelpful `EINVAL`. Every error built inside this
+        // module (`mount_err`, `cap_err`, `labeled`, ...) is exactly that
+        // kind of custom error, so without a side channel every failure in
+        // isolation setup -- namespaces, mounts, capabilities, Landlock,
+        // seccomp -- looks identical and undiagnosable from the outside.
+        // A `O_CLOEXEC` pipe closes itself on a successful `execve` with no
+        // data written; on failure the child writes the real error text
+        // before dying, and the parent reads it back to build a report that
+        // actually says what went wrong.
+        let (err_read, err_write) = nix::unistd::pipe2(OFlag::O_CLOEXEC).map_err(|e| {
+            SandboxError::layer("setup", format!("failed to create diagnostics pipe: {e}"))
+        })?;
+
         let exec = ExecPlan {
             isolate,
             namespaces: ns_plan,
@@ -220,6 +238,7 @@ impl Sandbox for LinuxSandbox {
             landlock: landlock_plan,
             rlimits: rlimit_plan,
             seccomp: seccomp_prog,
+            err_write,
         };
         // SAFETY: the closure only calls async-signal-safe-ish setup on a
         // single-threaded parent and returns a plain io::Result.
@@ -228,10 +247,28 @@ impl Sandbox for LinuxSandbox {
         }
 
         let start = Instant::now();
-        let mut child = cmd.spawn().map_err(|source| SandboxError::Spawn {
-            command: program.clone(),
-            source,
-        })?;
+        let spawn_result = cmd.spawn();
+        // `cmd` (and the pre_exec closure it owns, and that closure's copy
+        // of the pipe's write end) is kept alive by Rust's `Command` after
+        // `spawn()` returns, in case the caller spawns again. Drop it
+        // explicitly so our copy of the write end closes too -- otherwise a
+        // successful run (which writes nothing) would leave the read below
+        // blocked forever waiting for an EOF that a still-open write end
+        // would never deliver.
+        drop(cmd);
+        let detail = read_setup_error(err_read);
+        let mut child = match spawn_result {
+            Ok(child) => child,
+            Err(source) => {
+                return Err(match detail {
+                    Some(detail) => SandboxError::layer("setup", detail),
+                    None => SandboxError::Spawn {
+                        command: program.clone(),
+                        source,
+                    },
+                });
+            }
+        };
         let pid = child.id() as i32;
 
         if let Some(cg) = &cgroup {
@@ -306,10 +343,30 @@ struct ExecPlan {
     landlock: LandlockPlan,
     rlimits: RlimitPlan,
     seccomp: Option<BpfProgram>,
+    /// Write end of a diagnostics pipe back to the parent. `pre_exec` can
+    /// only carry a bare OS error code across the fork boundary, so on
+    /// failure the real error text is written here before returning -- see
+    /// the comment where this pipe is created in `run()`.
+    err_write: OwnedFd,
 }
 
 impl ExecPlan {
     fn apply(&self) -> io::Result<()> {
+        match self.apply_inner() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                let bytes = &msg.as_bytes()[..msg.len().min(4096)];
+                // Best-effort: if the pipe write itself fails there is
+                // nothing more diagnosable to do, and the original error is
+                // still returned and still aborts the run either way.
+                let _ = nix::unistd::write(&self.err_write, bytes);
+                Err(e)
+            }
+        }
+    }
+
+    fn apply_inner(&self) -> io::Result<()> {
         if self.isolate {
             self.namespaces.enter()?;
             self.mounts.setup()?;
@@ -339,6 +396,19 @@ impl ExecPlan {
         }
         Ok(())
     }
+}
+
+/// Read whatever the child wrote to the setup-diagnostics pipe before
+/// dying, if anything. Returns `None` on a clean EOF (no error occurred, or
+/// the child never got far enough to report one) and ignores read errors
+/// the same way, since this is a best-effort diagnostic, not a boundary.
+fn read_setup_error(read_end: OwnedFd) -> Option<String> {
+    let mut buf = [0u8; 4096];
+    let n = nix::unistd::read(read_end.as_raw_fd(), &mut buf).ok()?;
+    if n == 0 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&buf[..n]).into_owned())
 }
 
 fn set_no_new_privs() -> io::Result<()> {
@@ -455,5 +525,23 @@ mod tests {
         assert!(network_detail(NetworkMode::None, true).contains("no routes"));
         assert!(network_detail(NetworkMode::None, false).contains("unavailable"));
         assert!(network_detail(NetworkMode::Full, false).contains("host network"));
+    }
+
+    #[test]
+    fn read_setup_error_returns_none_on_clean_eof() {
+        let (read_end, write_end) = nix::unistd::pipe2(OFlag::O_CLOEXEC).unwrap();
+        drop(write_end); // no error written, and the only writer is gone
+        assert_eq!(read_setup_error(read_end), None);
+    }
+
+    #[test]
+    fn read_setup_error_recovers_the_written_message() {
+        let (read_end, write_end) = nix::unistd::pipe2(OFlag::O_CLOEXEC).unwrap();
+        nix::unistd::write(&write_end, b"mount bind: Permission denied").unwrap();
+        drop(write_end);
+        assert_eq!(
+            read_setup_error(read_end).as_deref(),
+            Some("mount bind: Permission denied")
+        );
     }
 }
