@@ -67,7 +67,7 @@ On Linux, Confinery stacks these layers (see [docs/security-model.md](docs/secur
 |-------|-----------|---------|
 | Filesystem | mount namespace + `pivot_root`, or Landlock | deny-by-default allowlist |
 | Network | network namespace | none |
-| Processes | PID/IPC/UTS namespaces | isolated |
+| Processes | IPC/UTS namespaces | isolated (PID namespace not yet implemented; see [Known limits](docs/security-model.md#known-limits)) |
 | Syscalls | seccomp-BPF | dangerous calls blocked |
 | Privileges | capability drop + `no_new_privs` | all capabilities dropped |
 | Resources | cgroups v2 + rlimits | 2 GiB, 512 pids, 1024 fds |

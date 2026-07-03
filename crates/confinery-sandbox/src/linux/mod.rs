@@ -125,6 +125,20 @@ impl Sandbox for LinuxSandbox {
                 "unavailable or disabled; using confine plan"
             },
         );
+        // Not implemented: entering a PID namespace requires forking after
+        // unshare(CLONE_NEWPID), which the calling process itself never
+        // moves into -- a mismatch with the current single pre_exec-then-
+        // execve spawn path. Recorded explicitly, always skipped, so
+        // `confinery doctor`/`--dry-run`/the audit trail never imply a
+        // boundary this build doesn't have. See docs/security-model.md.
+        record_layer(
+            auditor,
+            &spec.id,
+            &mut layers,
+            "pid_namespace",
+            false,
+            "not implemented; sandboxed process shares the host PID namespace",
+        );
         record_layer(
             auditor,
             &spec.id,

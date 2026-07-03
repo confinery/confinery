@@ -24,6 +24,23 @@ A fresh `tmpfs` becomes the root. Only allowlisted paths are bind mounted in, so
 
 When namespaces are unavailable, Landlock enforces the same path allowlist in-kernel using `no_new_privs`. It is an allowlist, so it cannot carve a denied child out of an allowed parent — that is the mount layer's job. In confine mode Confinery fails closed if Landlock is unavailable.
 
+### Process isolation
+
+UTS and IPC namespaces are unshared, giving the sandbox its own hostname and
+IPC objects. **PID namespace isolation is not implemented.** Entering one
+requires the process that calls `unshare(CLONE_NEWPID)` to then `fork()` a
+child that becomes PID 1 of the new namespace -- the caller itself never
+moves into it. That doesn't compose with how Confinery spawns today (a
+single `pre_exec` hook that ends in `execve` of the target, not a fork), so
+the sandboxed process shares the host's PID namespace. Combined with the
+user namespace mapping the caller's own real UID, this means the sandboxed
+process can see every process on the host owned by that UID via `/proc`,
+and can signal (including `SIGKILL`) any of them -- a materially larger
+blast radius than "confined to the sandbox". Restructuring the spawn path
+around a small supervisor/init process (so the real target can become PID 1
+of a genuine new namespace) is tracked as future work; until then, treat
+process visibility and signaling as unconfined.
+
 ### Network namespace
 
 `none` and `loopback` modes get an isolated network stack with no route off the host. `loopback` additionally raises `lo`. `allowlist` and `full` share the host network; host-based allowlisting is not yet enforced in-kernel and is reported as such.
@@ -53,9 +70,11 @@ Least privilege out of the box: no network, deny-by-default filesystem, all capa
 
 ## Known limits
 
-- Read-only bind mounts are not made read-only recursively; submounts under a read-only path may stay writable. System directories rarely have any.
+- PID namespace isolation is not implemented; see [Process isolation](#process-isolation) above.
+- Read-only bind mounts are made recursively read-only on Linux 5.12+ via `mount_setattr`; older kernels (still new enough to support unprivileged user namespaces) fall back to a non-recursive remount, so a submount under a read-only path could stay writable there. System directories rarely carry any.
+- `deny` masking is a mount-layer mechanism and only applies under the `isolate` plan. Landlock (the `confine` fallback's filesystem boundary) is an allowlist and cannot carve a denied child out of an allowed parent, so a `deny` entry has no effect when a host can't do namespaces.
 - Host-based network allowlisting is not enforced in-kernel yet.
 - cgroup limits are skipped without a writable, delegated hierarchy; rlimits still apply.
-- Windows filesystem/network isolation is not implemented.
+- Windows filesystem/network isolation is not implemented, and the Job Object backend does not otherwise restrict privileges: the sandboxed process keeps the full token, group memberships, and filesystem ACL access of the invoking user.
 
 When a layer cannot be applied, Confinery records it in the audit trail and the run report rather than pretending it succeeded.
