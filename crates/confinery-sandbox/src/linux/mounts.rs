@@ -80,9 +80,12 @@ impl MountPlan {
         }
         self.setup_proc()?;
 
-        // 6. Mask denied paths that ended up visible.
+        // 6. Mask denied paths that ended up visible. This is the boundary
+        // that protects secrets like `~/.ssh` and `~/.aws`, so a masking
+        // failure must abort the run rather than continue with the path
+        // silently still reachable.
         for path in &self.deny {
-            self.mask_path(path);
+            self.mask_path(path)?;
         }
 
         // 7. Pivot into the new root and detach the old one.
@@ -145,15 +148,19 @@ impl MountPlan {
         .map_err(mount_err("bind"))?;
 
         if read_only {
-            // Remount the top of the bind read-only. Submounts are not made
-            // read-only recursively; system dirs rarely carry any.
-            let _ = mount(
+            // Remount the top of the bind read-only. This is a security
+            // boundary the operator explicitly asked for, so a failure here
+            // must abort the run rather than leave the path silently
+            // writable. Submounts are not made read-only recursively by
+            // this call; see `remount_readonly_recursive` below.
+            mount(
                 NONE,
                 &target,
                 NONE,
                 MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY | MsFlags::MS_NOSUID,
                 NONE,
-            );
+            )
+            .map_err(mount_err("readonly-remount"))?;
         }
         Ok(())
     }
@@ -215,21 +222,35 @@ impl MountPlan {
         Ok(())
     }
 
-    fn mask_path(&self, path: &Path) {
+    /// Mask a `deny`-listed path that ended up visible through a bind mount.
+    /// This is the boundary protecting secrets such as `~/.ssh` and
+    /// `~/.aws`, so every failure mode here must be reported, not absorbed:
+    /// a path that doesn't exist inside the sandbox is nothing to mask (safe
+    /// no-op), but a path that exists and fails to mask must abort the run.
+    fn mask_path(&self, path: &Path) -> io::Result<()> {
         let target = self.target_of(path);
-        let Ok(meta) = std::fs::symlink_metadata(&target) else {
-            return;
+        let meta = match std::fs::symlink_metadata(&target) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
         };
         if meta.is_dir() {
-            let _ = mount(
+            mount(
                 Some("tmpfs"),
                 &target,
                 Some("tmpfs"),
                 MsFlags::MS_RDONLY | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
                 Some("mode=0000"),
-            );
+            )
+            .map_err(mount_err("mask-dir"))
         } else if PathBuf::from("/dev/null").exists() {
-            let _ = mount(Some("/dev/null"), &target, NONE, MsFlags::MS_BIND, NONE);
+            mount(Some("/dev/null"), &target, NONE, MsFlags::MS_BIND, NONE)
+                .map_err(mount_err("mask-file"))
+        } else {
+            Err(io::Error::other(format!(
+                "cannot mask `{}`: /dev/null is unavailable",
+                path.display()
+            )))
         }
     }
 

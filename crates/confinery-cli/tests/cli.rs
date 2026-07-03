@@ -158,3 +158,73 @@ fn runs_a_command_in_the_sandbox() {
         .success()
         .stdout(predicate::str::contains("hello-confinery"));
 }
+
+// Regression test for the `deny` masking fix: a denied path bound in through
+// an allowed parent must actually be unreadable inside the sandbox, not just
+// "masked if the mount happens to succeed".
+#[cfg(target_os = "linux")]
+#[test]
+fn deny_list_masks_secret_file_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let ro = dir.path().join("ro");
+    std::fs::create_dir_all(&ro).unwrap();
+    let secret = ro.join("secret");
+    std::fs::write(&secret, "topsecret-value").unwrap();
+
+    let profile = format!(
+        "name = \"deny-test\"\n\
+         [filesystem]\n\
+         read_only = [\"/usr\", \"/bin\", \"/lib\", \"/lib64\", {:?}]\n\
+         deny = [{:?}]\n\
+         [network]\n\
+         mode = \"none\"\n",
+        ro, secret
+    );
+    let path = write_profile(&dir, "deny.toml", &profile);
+
+    confinery()
+        .args(["run", "--profile"])
+        .arg(&path)
+        .args(["--", "cat", secret.to_str().unwrap()])
+        .assert()
+        .stdout(predicate::str::contains("topsecret-value").not());
+}
+
+// Regression test for the read-only-remount fix: a `read_only` path must
+// actually reject writes inside the sandbox, and the fix must not silently
+// let the write through.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_only_paths_reject_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let ro = dir.path().join("ro");
+    std::fs::create_dir_all(&ro).unwrap();
+    let target = ro.join("public.txt");
+    std::fs::write(&target, "original").unwrap();
+
+    let profile = format!(
+        "name = \"ro-test\"\n\
+         [filesystem]\n\
+         read_only = [\"/usr\", \"/bin\", \"/lib\", \"/lib64\", {:?}]\n\
+         [network]\n\
+         mode = \"none\"\n",
+        ro
+    );
+    let path = write_profile(&dir, "ro.toml", &profile);
+
+    confinery()
+        .args(["run", "--profile"])
+        .arg(&path)
+        .args([
+            "--",
+            "sh",
+            "-c",
+            &format!("echo modified > {}", target.to_str().unwrap()),
+        ])
+        .assert()
+        .failure();
+
+    // The write must not have reached the host file either.
+    let contents = std::fs::read_to_string(&target).unwrap();
+    assert_eq!(contents, "original");
+}
