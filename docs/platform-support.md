@@ -50,4 +50,4 @@ macOS and other systems have no backend; Confinery fails closed rather than runn
 
 ## Reproducibility
 
-The toolchain is pinned in `rust-toolchain.toml`, `Cargo.lock` is committed, and release binaries are built and signed only through GitHub Actions. The Linux release is a static musl binary with no runtime dependencies.
+The toolchain is pinned in `rust-toolchain.toml`, `Cargo.lock` is committed, and release binaries are built and signed only through GitHub Actions. The Linux release is a static musl binary with no runtime dependencies. Each release also ships a CycloneDX SBOM (`*.cdx.json`, one per target) alongside the binaries, checksummed and signed the same way.
