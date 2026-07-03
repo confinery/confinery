@@ -65,3 +65,21 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans licenses sources advisories
+
+  fuzz-smoke:
+    name: fuzz smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/confinery-core/fuzz
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: fuzz each target briefly
+        working-directory: crates/confinery-core
+        run: |
+          for target in profile_toml profile_json units; do
+            cargo fuzz run "$target" -- -max_total_time=30
+          done

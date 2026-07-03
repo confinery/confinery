@@ -171,7 +171,12 @@ impl HumanDuration {
                     ))
                 }
             };
-            total += Duration::from_secs_f64(seconds);
+            let segment = Duration::try_from_secs_f64(seconds).map_err(|_| {
+                CoreError::invalid("duration", format!("`{input}` is out of range"))
+            })?;
+            total = total.checked_add(segment).ok_or_else(|| {
+                CoreError::invalid("duration", format!("`{input}` is out of range"))
+            })?;
         }
         if !number.is_empty() {
             return Err(CoreError::invalid(
@@ -278,5 +283,14 @@ mod tests {
     fn rejects_bad_durations() {
         assert!(HumanDuration::parse("10x").is_err());
         assert!(HumanDuration::parse("10m5").is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range_durations_instead_of_panicking() {
+        // Found by fuzzing (fuzz/fuzz_targets/units.rs): a numeric segment
+        // large enough that `Duration::from_secs_f64` would panic on
+        // overflow. Must return a clean error instead.
+        assert!(HumanDuration::parse("1e400s").is_err());
+        assert!(HumanDuration::parse(&format!("{}d", "9".repeat(30))).is_err());
     }
 }

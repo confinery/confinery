@@ -1,0 +1,40 @@
+[package]
+name = "confinery-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Deliberately its own workspace: fuzz crates use nightly-only sanitizer
+# flags and a churny, disposable dependency set that has no business
+# affecting the main workspace's Cargo.lock.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.confinery-core]
+path = ".."
+
+[[bin]]
+name = "profile_toml"
+path = "fuzz_targets/profile_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile_json"
+path = "fuzz_targets/profile_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "units"
+path = "fuzz_targets/units.rs"
+test = false
+doc = false
+bench = false
