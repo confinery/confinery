@@ -130,7 +130,7 @@ impl Sandbox for LinuxSandbox {
             "filesystem",
             true,
             if isolate {
-                "pivot_root mount allowlist"
+                "pivot_root mount allowlist + landlock (best-effort backstop)"
             } else if host.has("landlock") {
                 "landlock path allowlist"
             } else {
@@ -319,14 +319,18 @@ impl ExecPlan {
         self.caps.apply()?;
         set_no_new_privs()?;
 
-        if !self.isolate {
-            // In confine mode Landlock is the only filesystem boundary, so a
-            // kernel without it must fail closed rather than run unconfined.
-            if self.landlock.apply()? == LandlockStatus::Unsupported {
-                return Err(io::Error::other(
-                    "Landlock unavailable; cannot confine filesystem (try namespace isolation)",
-                ));
-            }
+        // Landlock is applied in both plans: under `isolate` the mount
+        // namespace + pivot_root is the primary filesystem boundary, but
+        // layering Landlock on top is genuine defense in depth -- a bug or
+        // bypass in the mount setup has an independent, in-kernel backstop
+        // instead of none at all. Under `confine` (no namespaces) Landlock
+        // *is* the filesystem boundary, so a kernel without it must fail
+        // closed rather than run unconfined.
+        let landlock_status = self.landlock.apply()?;
+        if !self.isolate && landlock_status == LandlockStatus::Unsupported {
+            return Err(io::Error::other(
+                "Landlock unavailable; cannot confine filesystem (try namespace isolation)",
+            ));
         }
 
         self.rlimits.apply()?;
