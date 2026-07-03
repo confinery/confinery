@@ -7,13 +7,12 @@ mod templates;
 use clap::Parser;
 
 use cli::{Cli, Command};
-use confinery_core::logging::{self, LogFormat};
+use confinery_core::logging;
 
 fn main() {
     let cli = Cli::parse();
 
-    let format: LogFormat = cli.log_format.parse().unwrap_or_default();
-    logging::init(format, &cli.log_level);
+    logging::init(cli.log_format.into(), &cli.log_level);
 
     let result = match cli.command {
         Command::Run(args) => commands::run::run(args),

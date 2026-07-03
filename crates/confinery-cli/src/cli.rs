@@ -9,8 +9,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(name = "confinery", version, about, propagate_version = true)]
 pub struct Cli {
     /// Log output format.
-    #[arg(long, global = true, default_value = "human")]
-    pub log_format: String,
+    #[arg(long, global = true, value_enum, default_value_t = LogFormat::Human)]
+    pub log_format: LogFormat,
 
     /// Log level when RUST_LOG is unset (error, warn, info, debug, trace).
     #[arg(long, global = true, default_value = "warn")]
@@ -65,6 +65,30 @@ pub struct RunArgs {
     /// The command to run, after `--`.
     #[arg(last = true, required = true, num_args = 1..)]
     pub command: Vec<String>,
+}
+
+/// CLI-facing mirror of `confinery_core::logging::LogFormat`.
+///
+/// The core crate deliberately has no dependency on `clap` (it's the
+/// platform-agnostic policy/audit model, shared with the sandbox engine),
+/// so this small duplicate exists to give `--log-format` real validation
+/// via `value_enum` instead of a bare `String` that silently fell back to
+/// `human` on any typo, with no warning that the flag was ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    /// Compact, human-readable lines.
+    Human,
+    /// One JSON object per line.
+    Json,
+}
+
+impl From<LogFormat> for confinery_core::logging::LogFormat {
+    fn from(format: LogFormat) -> Self {
+        match format {
+            LogFormat::Human => confinery_core::logging::LogFormat::Human,
+            LogFormat::Json => confinery_core::logging::LogFormat::Json,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
