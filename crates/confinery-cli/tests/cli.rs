@@ -147,12 +147,15 @@ fn run_requires_a_command() {
 
 #[test]
 fn dry_run_prints_plan() {
+    // "seccomp" is a Linux-backend-specific layer name; the Windows Job
+    // Object backend's plan has no such entry (job_object, ui_restrictions,
+    // environment, filesystem, network instead), so only assert on the
+    // platform-independent part of the output.
     confinery()
         .args(["run", "--dry-run", "--", "echo", "hi"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("dry run"))
-        .stdout(predicate::str::contains("seccomp"));
+        .stdout(predicate::str::contains("dry run"));
 }
 
 #[test]
