@@ -43,7 +43,7 @@ process visibility and signaling as unconfined.
 
 ### Network namespace
 
-`none` and `loopback` modes get an isolated network stack with no route off the host. `loopback` additionally raises `lo`. `allowlist` and `full` share the host network; host-based allowlisting is not yet enforced in-kernel and is reported as such.
+`none` and `loopback` modes get an isolated network stack with no route off the host. `loopback` additionally raises `lo`. `allowlist` and `full` share the host network, since real network namespace isolation (a fresh namespace bridged to the host via veth/NAT) needs `CAP_NET_ADMIN` in the *host's* network namespace, which an unprivileged sandbox never has. `allowlist` is nonetheless enforced in-kernel: every `network.allow` entry is resolved to concrete addresses once, up front, and a seccomp user-notification filter routes every `connect(2)` call to the parent process, which allows or denies it against that resolved list — see [Known limits](#known-limits) for what this does and does not cover.
 
 ### Seccomp
 
@@ -73,7 +73,7 @@ Least privilege out of the box: no network, deny-by-default filesystem, all capa
 - PID namespace isolation is not implemented; see [Process isolation](#process-isolation) above.
 - Read-only bind mounts are made recursively read-only on Linux 5.12+ via `mount_setattr`; older kernels (still new enough to support unprivileged user namespaces) fall back to a non-recursive remount, so a submount under a read-only path could stay writable there. System directories rarely carry any.
 - `deny` masking is a mount-layer mechanism and only applies under the `isolate` plan. Landlock (the `confine` fallback's filesystem boundary) is an allowlist and cannot carve a denied child out of an allowed parent, so a `deny` entry has no effect when a host can't do namespaces.
-- Host-based network allowlisting is not enforced in-kernel yet.
+- Host-based network allowlisting (`network.mode = "allowlist"`) only intercepts `connect(2)`; a connectionless UDP flow (e.g. a DNS query via `sendto` on an unconnected socket) is not covered, so this does not by itself close a UDP/DNS-based exfiltration channel. Hostnames in `network.allow` are resolved once, at startup, against the *parent's* resolver — not re-resolved or pinned for the run, so it is not DNS-rebinding-proof. It also can't be layered a second time if Confinery itself runs inside another seccomp-user-notification sandbox (the kernel permits only one such filter per thread's lifetime, checked across the whole inherited process ancestry); that case fails closed with an explicit error rather than silently running unfiltered.
 - cgroup limits are skipped without a writable, delegated hierarchy; rlimits still apply.
 - Windows filesystem/network isolation is not implemented, and the Job Object backend does not otherwise restrict privileges: the sandboxed process keeps the full token, group memberships, and filesystem ACL access of the invoking user.
 

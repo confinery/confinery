@@ -130,18 +130,17 @@ fn looks_like_secret(name: &str) -> bool {
 
 /// Flag the specific combination this project's threat model exists to
 /// prevent: a profile that forwards what looks like a credential from the
-/// host environment into a sandbox with unrestricted network egress. Host-
-/// based network allowlisting isn't enforced in-kernel yet (see
-/// docs/security-model.md), so `full` is the only network mode that
-/// actually gives a program real internet access today -- meaning this
-/// exact combination is the one case where a compromised or prompt-
-/// injected process inside the sandbox has both a secret worth stealing
-/// and an unmonitored path to exfiltrate it. Deliberately an error, not a
-/// warning: this is the one validation in this module that fails a run
-/// rather than just flagging it, because the warning-only version of this
-/// check already exists (`network.full`) and evidently was not enough to
-/// stop the project's own shipped `assistant.toml` template from defaulting
-/// to exactly this shape.
+/// host environment into a sandbox with unrestricted network egress. `full`
+/// is the only network mode with no enforcement at all -- `allowlist` is
+/// enforced in-kernel via seccomp user notification (see
+/// docs/security-model.md) -- so `full` plus a forwarded secret is the one
+/// case where a compromised or prompt-injected process inside the sandbox
+/// has both a secret worth stealing and an unmonitored path to exfiltrate
+/// it. Deliberately an error, not a warning: this is the one validation in
+/// this module that fails a run rather than just flagging it, because the
+/// warning-only version of this check already exists (`network.full`) and
+/// evidently was not enough to stop the project's own shipped
+/// `assistant.toml` template from defaulting to exactly this shape.
 fn validate_secret_exposure(profile: &Profile, r: &mut ValidationReport) {
     if !matches!(profile.network.mode, NetworkMode::Full) {
         return;
@@ -173,11 +172,11 @@ fn validate_secret_exposure(profile: &Profile, r: &mut ValidationReport) {
         "network.full_with_secrets",
         "network.mode",
         format!(
-            "network mode is `full` (unrestricted egress, and host-based allowlisting is not \
-             yet enforced) while the environment forwards what looks like credential(s): {}. \
-             A compromised or prompt-injected process in this sandbox can exfiltrate them to \
-             any host. Use `network.mode = \"none\"` or `\"loopback\"`, or remove these \
-             variables from `[env]`, before running this profile.",
+            "network mode is `full` (unrestricted egress) while the environment forwards what \
+             looks like credential(s): {}. A compromised or prompt-injected process in this \
+             sandbox can exfiltrate them to any host. Use `network.mode = \"none\"`, \
+             `\"loopback\"`, or `\"allowlist\"`, or remove these variables from `[env]`, \
+             before running this profile.",
             offenders.join(", ")
         ),
     );

@@ -13,6 +13,7 @@
 
 mod caps;
 mod cgroups;
+mod connect_filter;
 mod landlock;
 mod mounts;
 mod namespaces;
@@ -22,11 +23,12 @@ mod syscall_table;
 
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::net::UnixDatagram;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -36,6 +38,8 @@ use confinery_core::profile::{expand_home, resolve_relative};
 use nix::fcntl::OFlag;
 use nix::unistd::{getgid, getuid};
 use seccompiler::BpfProgram;
+
+use self::connect_filter::DeniedAttempt;
 
 use self::caps::CapPlan;
 use self::cgroups::CgroupPlan;
@@ -111,6 +115,22 @@ impl Sandbox for LinuxSandbox {
         let cap_plan = CapPlan::from_policy(&profile.capabilities)?;
         let seccomp_prog: Option<BpfProgram> = seccomp::compile(&profile.syscalls)?;
 
+        // `allowlist` network mode is enforced by intercepting connect(2)
+        // via seccomp user notification (see connect_filter.rs), not by
+        // network namespace isolation -- the sandboxed process keeps the
+        // host's real network stack either way, same as `full` always has.
+        // Resolution happens here, in the trusted parent, before anything
+        // in the sandbox runs.
+        let allowed_endpoints = if profile.network.mode == NetworkMode::Allowlist {
+            Some(
+                connect_filter::resolve_allowlist(&profile.network.allow).map_err(|e| {
+                    SandboxError::layer("network", format!("allowlist resolution: {e}"))
+                })?,
+            )
+        } else {
+            None
+        };
+
         // Assemble the audit + report view of the layers.
         let mut layers = Vec::new();
         record_layer(
@@ -158,8 +178,14 @@ impl Sandbox for LinuxSandbox {
             &spec.id,
             &mut layers,
             "network",
-            net_isolate || !profile.network.wants_isolation(),
-            network_detail(profile.network.mode, net_isolate),
+            net_isolate
+                || matches!(profile.network.mode, NetworkMode::Full)
+                || allowed_endpoints.is_some(),
+            network_detail(
+                profile.network.mode,
+                net_isolate,
+                allowed_endpoints.as_ref().map(Vec::len),
+            ),
         );
         record_layer(
             auditor,
@@ -244,6 +270,20 @@ impl Sandbox for LinuxSandbox {
             SandboxError::layer("setup", format!("failed to create diagnostics pipe: {e}"))
         })?;
 
+        // A second, independent hand-off channel for the connect-notify fd
+        // (see connect_filter.rs) -- only created when it'll actually be
+        // used, since it's a real kernel resource (a socket pair) held
+        // open for the run's whole lifetime.
+        let (connect_parent_sock, connect_child_sock) = match &allowed_endpoints {
+            Some(_) => {
+                let (p, c) = connect_filter::create_channel().map_err(|e| {
+                    SandboxError::layer("network", format!("allowlist channel: {e}"))
+                })?;
+                (Some(p), Some(c))
+            }
+            None => (None, None),
+        };
+
         let exec = ExecPlan {
             isolate,
             namespaces: ns_plan,
@@ -253,6 +293,7 @@ impl Sandbox for LinuxSandbox {
             rlimits: rlimit_plan,
             seccomp: seccomp_prog,
             err_write,
+            connect_child_sock,
         };
         // SAFETY: the closure only calls async-signal-safe-ish setup on a
         // single-threaded parent and returns a plain io::Result.
@@ -284,6 +325,28 @@ impl Sandbox for LinuxSandbox {
             }
         };
         let pid = child.id() as i32;
+
+        // The child sends the connect-notify fd very early in its own
+        // pre_exec, well before it execs the target program, so a blocking
+        // receive here does not race it in practice. If this fails, the
+        // child reached spawn() successfully but the allowlist filter
+        // never came up -- `allowlist` mode must not silently run
+        // unfiltered, so this is fatal, not a warning.
+        let denied_connections: Arc<Mutex<Vec<DeniedAttempt>>> = Arc::new(Mutex::new(Vec::new()));
+        if let (Some(sock), Some(endpoints)) = (connect_parent_sock, &allowed_endpoints) {
+            if let Err(err) = connect_filter::receive_and_supervise(
+                sock,
+                endpoints.clone(),
+                denied_connections.clone(),
+            ) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(SandboxError::layer(
+                    "network",
+                    format!("allowlist filter did not start: {err}"),
+                ));
+            }
+        }
 
         if let Some(cg) = &cgroup {
             if let Err(err) = cg.add_process(child.id()) {
@@ -319,6 +382,23 @@ impl Sandbox for LinuxSandbox {
                         .unwrap_or_default()
                 ),
             });
+        }
+        // A best-effort snapshot: the supervisor thread isn't joined here
+        // (it may still be serving a lingering grandchild process that
+        // inherited the filter but outlived the direct child, and there is
+        // no PID namespace -- see the pid_namespace layer above -- to
+        // guarantee those are gone by now), so a denied attempt in the
+        // narrow window between this read and process exit could be
+        // missed. The whole `confinery` process exiting cleans up the
+        // detached thread either way.
+        if let Ok(denied) = denied_connections.lock() {
+            for attempt in denied.iter() {
+                auditor.record(AuditEvent::Violation {
+                    id: spec.id.clone(),
+                    kind: "network.denied".into(),
+                    detail: format!("connect() to {} refused (not in allowlist)", attempt.addr),
+                });
+            }
         }
         auditor.record(AuditEvent::SandboxExit {
             id: spec.id.clone(),
@@ -362,6 +442,10 @@ struct ExecPlan {
     /// failure the real error text is written here before returning -- see
     /// the comment where this pipe is created in `run()`.
     err_write: OwnedFd,
+    /// Present only for `network.mode = "allowlist"`: the child installs
+    /// the connect-notify filter and sends its fd back over this socket.
+    /// See connect_filter.rs.
+    connect_child_sock: Option<UnixDatagram>,
 }
 
 impl ExecPlan {
@@ -407,6 +491,12 @@ impl ExecPlan {
         self.rlimits.apply()?;
         if let Some(prog) = &self.seccomp {
             seccomp::install(prog)?;
+        }
+        // Stacked alongside (not replacing) the filter just installed --
+        // see connect_filter.rs's module docs for why this needs its own
+        // separate filter rather than folding into the one above.
+        if let Some(sock) = &self.connect_child_sock {
+            connect_filter::install_and_send(sock)?;
         }
         Ok(())
     }
@@ -455,14 +545,19 @@ fn hostname_for(name: &str) -> String {
     format!("confinery-{sanitized}").chars().take(63).collect()
 }
 
-fn network_detail(mode: NetworkMode, isolated: bool) -> String {
+fn network_detail(mode: NetworkMode, isolated: bool, allowed_count: Option<usize>) -> String {
     match mode {
         NetworkMode::None if isolated => "isolated netns, no routes".into(),
         NetworkMode::Loopback if isolated => "isolated netns, loopback only".into(),
         NetworkMode::None | NetworkMode::Loopback => {
             "requested isolation unavailable (no netns)".into()
         }
-        NetworkMode::Allowlist => "host network (allowlist not yet enforced in-kernel)".into(),
+        NetworkMode::Allowlist => match allowed_count {
+            Some(n) => format!(
+                "host network, connect() filtered via seccomp notify ({n} endpoint(s) allowed)"
+            ),
+            None => "host network (allowlist filter unavailable)".into(),
+        },
         NetworkMode::Full => "host network".into(),
     }
 }
@@ -539,9 +634,11 @@ mod tests {
 
     #[test]
     fn network_detail_reflects_mode() {
-        assert!(network_detail(NetworkMode::None, true).contains("no routes"));
-        assert!(network_detail(NetworkMode::None, false).contains("unavailable"));
-        assert!(network_detail(NetworkMode::Full, false).contains("host network"));
+        assert!(network_detail(NetworkMode::None, true, None).contains("no routes"));
+        assert!(network_detail(NetworkMode::None, false, None).contains("unavailable"));
+        assert!(network_detail(NetworkMode::Full, false, None).contains("host network"));
+        assert!(network_detail(NetworkMode::Allowlist, false, Some(2)).contains("2 endpoint"));
+        assert!(network_detail(NetworkMode::Allowlist, false, None).contains("unavailable"));
     }
 
     #[test]

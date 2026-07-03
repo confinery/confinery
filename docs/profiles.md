@@ -44,7 +44,8 @@ allow = ["api.anthropic.com:443"] # used when mode = "allowlist"
 
 - `none` — isolated stack, no routes (default).
 - `loopback` — isolated stack with `lo` up.
-- `allowlist` / `full` — host network. Host-based allowlisting is not yet enforced in-kernel; validation warns.
+- `allowlist` — host network, but every `connect(2)` is routed through a seccomp user-notification filter to the parent, which allows it only if it matches a resolved `network.allow` entry; anything else gets a refused connection. Hostnames are resolved once at startup, and only `connect(2)` is covered (not connectionless UDP) — see [docs/security-model.md](security-model.md#known-limits).
+- `full` — host network, unrestricted. Validation warns.
 
 ## `[resources]`
 
