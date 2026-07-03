@@ -73,11 +73,34 @@ impl Auditor {
     }
 
     /// Append events to a file, creating it if needed.
+    ///
+    /// Audit records include the full command line of every sandboxed run,
+    /// which commonly carries secrets (API keys, tokens passed as flags).
+    /// The file is created with `0600` permissions on Unix so it isn't
+    /// world- or group-readable by default the way a bare `open()` (subject
+    /// to the process umask, typically `0644`) would leave it.
     pub fn to_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path)?;
+        // `mode()` only takes effect when the file is newly created; tighten
+        // it explicitly too, in case an audit file from before this fix (or
+        // written by something else) is being appended to.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(err) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                // Not fatal to the run -- the audit log is a best-effort
+                // sink -- but worth surfacing since it means an existing
+                // audit file may be more widely readable than intended.
+                tracing::warn!(%err, "failed to restrict audit log file permissions to 0600");
+            }
+        }
         Ok(Auditor::to_writer(Box::new(file)))
     }
 
@@ -132,6 +155,22 @@ mod tests {
         assert!(out.contains("\"event\":\"sandbox_start\""));
         assert!(out.contains("\"ts\":"));
         assert!(out.ends_with('\n'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_file_is_created_with_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let _auditor = Auditor::to_file(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "audit log should not be group- or world-readable (command lines can carry secrets)"
+        );
     }
 
     struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
