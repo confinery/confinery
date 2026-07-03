@@ -148,19 +148,10 @@ impl MountPlan {
         .map_err(mount_err("bind"))?;
 
         if read_only {
-            // Remount the top of the bind read-only. This is a security
-            // boundary the operator explicitly asked for, so a failure here
-            // must abort the run rather than leave the path silently
-            // writable. Submounts are not made read-only recursively by
-            // this call; see `remount_readonly_recursive` below.
-            mount(
-                NONE,
-                &target,
-                NONE,
-                MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY | MsFlags::MS_NOSUID,
-                NONE,
-            )
-            .map_err(mount_err("readonly-remount"))?;
+            // This is a security boundary the operator explicitly asked
+            // for, so a failure to enforce it must abort the run rather
+            // than leave the path silently writable.
+            remount_readonly(&target)?;
         }
         Ok(())
     }
@@ -278,6 +269,60 @@ impl MountPlan {
 /// `None` typed for nix's generic mount signature.
 const NONE: Option<&Path> = None;
 
+/// Make `target` read-only, recursively including any submounts under it.
+///
+/// A plain `MS_REMOUNT|MS_RDONLY` (as used elsewhere in this file for
+/// non-recursive cases) only affects the top of the bind mount: a
+/// filesystem mounted *under* an allowed read-only path -- not unusual on
+/// systems where e.g. `/usr` carries its own submounts -- stays writable
+/// despite the operator's `read_only` request. `mount_setattr(2)` with
+/// `AT_RECURSIVE` (Linux 5.12+) closes that gap by applying the read-only
+/// attribute to the whole mount subtree in one atomic call. On older
+/// kernels that don't have the syscall, we fall back to the non-recursive
+/// remount so hosts between the namespace-isolation floor (unprivileged
+/// user namespaces, much older) and 5.12 still get top-level enforcement
+/// rather than failing closed entirely.
+fn remount_readonly(target: &Path) -> io::Result<()> {
+    match mount_setattr_readonly_recursive(target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => mount(
+            NONE,
+            target,
+            NONE,
+            MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY | MsFlags::MS_NOSUID,
+            NONE,
+        )
+        .map_err(mount_err("readonly-remount")),
+        Err(e) => Err(e),
+    }
+}
+
+fn mount_setattr_readonly_recursive(target: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    let path = CString::new(target.as_os_str().as_encoded_bytes())?;
+    let attr = libc::mount_attr {
+        attr_set: libc::MOUNT_ATTR_RDONLY | libc::MOUNT_ATTR_NOSUID,
+        attr_clr: 0,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::AT_RECURSIVE,
+            &attr as *const libc::mount_attr as *mut libc::c_void,
+            std::mem::size_of::<libc::mount_attr>(),
+        )
+    };
+    if ret < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn pivot_root(new_root: &str, put_old: &Path) -> io::Result<()> {
     use std::ffi::CString;
     let new = CString::new(new_root)?;
@@ -312,5 +357,77 @@ mod tests {
             plan.target_of(Path::new("/usr/bin")),
             PathBuf::from("/tmp/.confinery-root/usr/bin")
         );
+    }
+
+    // Regression test for the recursive-read-only fix: a submount nested
+    // under a read-only path must become read-only too, not just the top
+    // of the bind mount. Runs the actual check in a disposable, unprivileged
+    // user+mount namespace (forked, never exec'd) so it needs no real
+    // privilege and never touches the test binary's own mount table.
+    #[test]
+    fn readonly_remount_covers_nested_submounts() {
+        match unsafe { libc::fork() } {
+            -1 => panic!("fork failed: {}", io::Error::last_os_error()),
+            0 => {
+                let code = match check_recursive_readonly() {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        eprintln!("check_recursive_readonly: {e}");
+                        1
+                    }
+                };
+                std::process::exit(code);
+            }
+            pid => {
+                let mut status: libc::c_int = 0;
+                unsafe { libc::waitpid(pid, &mut status, 0) };
+                assert!(
+                    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+                    "recursive read-only check failed in child (status {status})"
+                );
+            }
+        }
+    }
+
+    fn check_recursive_readonly() -> io::Result<()> {
+        use nix::sched::{unshare, CloneFlags};
+
+        let uid = nix::unistd::getuid();
+        let gid = nix::unistd::getgid();
+        unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS).map_err(io::Error::from)?;
+        let _ = std::fs::write("/proc/self/setgroups", b"deny");
+        std::fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))?;
+        std::fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))?;
+
+        let outer = tempfile::tempdir()?;
+        let sub = outer.path().join("sub");
+        std::fs::create_dir_all(&sub)?;
+        let inner = tempfile::tempdir()?;
+        std::fs::write(inner.path().join("f"), b"original")?;
+
+        // Make `outer` a mount in its own right, then bind `inner` onto a
+        // subdirectory of it -- a submount nested under the path we are
+        // about to make read-only, mirroring e.g. /usr carrying its own
+        // submounts on some distros.
+        mount(
+            Some(outer.path()),
+            outer.path(),
+            NONE,
+            MsFlags::MS_BIND,
+            NONE,
+        )
+        .map_err(mount_err("outer-bind"))?;
+        mount(Some(inner.path()), &sub, NONE, MsFlags::MS_BIND, NONE)
+            .map_err(mount_err("inner-bind"))?;
+
+        remount_readonly(outer.path())?;
+
+        match std::fs::write(sub.join("f"), b"overwritten") {
+            Ok(()) => Err(io::Error::other(
+                "submount under the read-only path was still writable",
+            )),
+            Err(e) if e.raw_os_error() == Some(libc::EROFS) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
