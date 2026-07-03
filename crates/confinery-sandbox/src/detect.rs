@@ -74,7 +74,11 @@ pub fn detect() -> HostCapabilities {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{Feature, HostCapabilities};
+    use std::io::{self, Write};
+    use std::os::unix::process::CommandExt;
     use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::sync::OnceLock;
 
     fn read_trim(path: &str) -> Option<String> {
         std::fs::read_to_string(path)
@@ -85,16 +89,35 @@ mod linux {
     pub fn detect() -> HostCapabilities {
         let mut features = Vec::new();
 
-        // User namespaces.
+        // User namespaces. The sysctls below are necessary but not
+        // sufficient: a host can pass both and still deny the actual
+        // uid_map write via an LSM policy Confinery has no static file to
+        // check -- notably Ubuntu's AppArmor-based restriction on
+        // unprivileged user namespaces, enabled by default on GitHub
+        // Actions' `ubuntu-latest` runners. That combination let this
+        // detector report "available" on a host where every sandboxed run
+        // then failed deep inside namespace setup, with `confinery doctor`
+        // giving no warning beforehand. So the sysctls are only a cheap
+        // pre-filter; `userns_actually_works()` confirms with a real,
+        // throwaway attempt at exactly the sequence the sandbox itself uses
+        // before trusting the result.
         let max_userns = read_trim("/proc/sys/user/max_user_namespaces")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
-        let userns_ok = max_userns > 0
+        let sysctls_ok = max_userns > 0
             && read_trim("/proc/sys/kernel/unprivileged_userns_clone")
                 .map(|v| v != "0")
                 .unwrap_or(true);
+        let userns_ok = sysctls_ok && userns_actually_works();
         features.push(if userns_ok {
             Feature::yes("user_namespaces", format!("max={max_userns}"))
+        } else if sysctls_ok {
+            Feature::no(
+                "user_namespaces",
+                "sysctls allow it, but the kernel denied mapping a uid inside a \
+                 new namespace (commonly an LSM policy such as Ubuntu's AppArmor \
+                 unprivileged-userns restriction)",
+            )
         } else {
             Feature::no(
                 "user_namespaces",
@@ -160,6 +183,60 @@ mod linux {
             platform: "linux",
             features,
         }
+    }
+
+    /// Actually attempt the unshare(CLONE_NEWUSER) + uid_map dance the
+    /// sandbox depends on, in a disposable child that never reaches exec
+    /// under normal conditions and is killed immediately regardless. Memoized
+    /// for the process lifetime: the answer cannot change between calls and
+    /// each attempt costs a real fork+exec.
+    fn userns_actually_works() -> bool {
+        static RESULT: OnceLock<bool> = OnceLock::new();
+        *RESULT.get_or_init(|| {
+            let Ok(exe) = std::env::current_exe() else {
+                return false;
+            };
+            // Must be read here, in the parent, before any unshare happens:
+            // once the probe closure runs in the child it is already inside
+            // the fresh (unmapped) user namespace, where getuid() returns
+            // the overflow uid (65534) instead of the real one -- mapping
+            // that would always be rejected regardless of what the host
+            // actually allows. This mirrors exactly how the real sandbox
+            // captures `uid`/`gid` in `LinuxSandbox::run()` before spawning.
+            let uid = nix::unistd::getuid().as_raw();
+            let mut cmd = Command::new(exe);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // SAFETY: the closure only unshares a namespace and writes to
+            // /proc files it just gained from that unshare; nothing here
+            // touches shared parent state, and the child is killed right
+            // after spawn() returns, before it can do anything else even if
+            // the probe (and thus the exec that follows it) succeeds.
+            unsafe {
+                cmd.pre_exec(move || probe_uid_map_writable(uid));
+            }
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    true
+                }
+                Err(_) => false,
+            }
+        })
+    }
+
+    /// Runs inside the disposable probe child: mirrors exactly the sequence
+    /// `linux::namespaces::enter_user_namespace` uses for a real run.
+    fn probe_uid_map_writable(uid: u32) -> io::Result<()> {
+        use nix::sched::{unshare, CloneFlags};
+        unshare(CloneFlags::CLONE_NEWUSER).map_err(io::Error::from)?;
+        let _ = std::fs::write("/proc/self/setgroups", b"deny");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/proc/self/uid_map")?
+            .write_all(format!("0 {uid} 1\n").as_bytes())
     }
 
     /// Query the supported Landlock ABI version, or `None` if unsupported.
