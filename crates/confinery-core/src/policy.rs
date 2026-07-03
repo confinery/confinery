@@ -7,6 +7,10 @@ use crate::network::NetworkMode;
 use crate::profile::Profile;
 use crate::syscalls::SeccompAction;
 
+/// Matches the cgroup `cpu.max` period the Linux backend uses
+/// (linux/cgroups.rs's `PERIOD` constant, in microseconds).
+const CGROUP_CPU_PERIOD_US: f64 = 100_000.0;
+
 /// Severity of a validation diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -199,6 +203,21 @@ fn validate_resources(profile: &Profile, r: &mut ValidationReport) {
     if let Some(cpu) = res.cpu {
         if cpu <= 0.0 {
             r.error("cpu.zero", "resources.cpu", "must be greater than zero");
+        } else if cpu * CGROUP_CPU_PERIOD_US < 1.0 {
+            // The Linux backend quantizes this into a cgroup `cpu.max` quota
+            // as `(cpu * period) as u64` microseconds out of a 100ms period
+            // (see linux/cgroups.rs); anything below one microsecond of
+            // quota per period truncates to a literal 0% CPU allowance, so
+            // the process would never be scheduled rather than just being
+            // slow.
+            r.warn(
+                "cpu.rounds_to_zero",
+                "resources.cpu",
+                format!(
+                    "`{cpu}` is small enough to round down to a 0% CPU quota on Linux (cgroup \
+                     quotas are quantized to a 100ms period); the process would never run"
+                ),
+            );
         }
     }
     if let Some(pids) = res.pids {
@@ -377,6 +396,23 @@ mod tests {
         let report = validate(&p);
         assert!(!report.is_valid());
         assert!(report.errors().any(|d| d.code == "memory.zero"));
+    }
+
+    #[test]
+    fn warns_cpu_quota_rounds_to_zero() {
+        let mut p = Profile::default();
+        p.resources.cpu = Some(0.000001); // 0.1us of quota per 100ms period
+        let report = validate(&p);
+        assert!(report.is_valid(), "{:?}", report.diagnostics);
+        assert!(report.warnings().any(|d| d.code == "cpu.rounds_to_zero"));
+    }
+
+    #[test]
+    fn normal_cpu_value_does_not_warn() {
+        let mut p = Profile::default();
+        p.resources.cpu = Some(2.0);
+        let report = validate(&p);
+        assert!(!report.warnings().any(|d| d.code == "cpu.rounds_to_zero"));
     }
 
     #[test]
