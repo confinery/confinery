@@ -108,7 +108,7 @@ Checked against the command's basename before the sandbox starts.
 
 | Template | For |
 |----------|-----|
-| `assistant` | balanced sandbox for a coding agent (network on) |
+| `assistant` | balanced sandbox for a coding agent (loopback network by default; see the profile's own comments before switching to `full`) |
 | `strict` | maximum isolation, no network, seccomp allowlist |
 | `dev` | generous limits, loopback network |
 | `minimal` | least-privilege baseline from defaults |

@@ -89,6 +89,32 @@ fn init_minimal_is_valid() {
         .success();
 }
 
+// Regression guard for the network+secrets validation added alongside this
+// test: every shipped, embedded template must validate cleanly on its own,
+// with no follow-up edits required. `assistant.toml` briefly failed this
+// exact check when it defaulted to `network.mode = "full"` while forwarding
+// API key variables in `[env]`.
+#[test]
+fn builtin_templates_all_validate_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    for template in ["assistant", "strict", "dev", "minimal"] {
+        let out = confinery()
+            .args(["init", template])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let path = dir.path().join(format!("{template}.toml"));
+        std::fs::write(&path, out).unwrap();
+        confinery()
+            .args(["profile", "validate"])
+            .arg(&path)
+            .assert()
+            .success();
+    }
+}
+
 #[test]
 fn validate_flags_errors() {
     let dir = tempfile::tempdir().unwrap();

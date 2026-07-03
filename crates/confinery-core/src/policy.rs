@@ -108,8 +108,75 @@ pub fn validate(profile: &Profile) -> ValidationReport {
     validate_capabilities(profile, &mut r);
     validate_env(profile, &mut r);
     validate_tools(profile, &mut r);
+    validate_secret_exposure(profile, &mut r);
 
     r
+}
+
+/// Case-insensitive fragments that suggest an environment variable name
+/// carries a credential rather than ordinary configuration.
+const SECRET_LIKE_ENV_FRAGMENTS: &[&str] = &["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"];
+
+fn looks_like_secret(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    SECRET_LIKE_ENV_FRAGMENTS
+        .iter()
+        .any(|frag| upper.contains(frag))
+}
+
+/// Flag the specific combination this project's threat model exists to
+/// prevent: a profile that forwards what looks like a credential from the
+/// host environment into a sandbox with unrestricted network egress. Host-
+/// based network allowlisting isn't enforced in-kernel yet (see
+/// docs/security-model.md), so `full` is the only network mode that
+/// actually gives a program real internet access today -- meaning this
+/// exact combination is the one case where a compromised or prompt-
+/// injected process inside the sandbox has both a secret worth stealing
+/// and an unmonitored path to exfiltrate it. Deliberately an error, not a
+/// warning: this is the one validation in this module that fails a run
+/// rather than just flagging it, because the warning-only version of this
+/// check already exists (`network.full`) and evidently was not enough to
+/// stop the project's own shipped `assistant.toml` template from defaulting
+/// to exactly this shape.
+fn validate_secret_exposure(profile: &Profile, r: &mut ValidationReport) {
+    if !matches!(profile.network.mode, NetworkMode::Full) {
+        return;
+    }
+    if matches!(profile.env.mode, crate::env::EnvMode::Clear) {
+        return;
+    }
+    let mut offenders: Vec<&str> = profile
+        .env
+        .allow
+        .iter()
+        .map(String::as_str)
+        .filter(|n| looks_like_secret(n))
+        .collect();
+    offenders.extend(
+        profile
+            .env
+            .set
+            .keys()
+            .map(String::as_str)
+            .filter(|n| looks_like_secret(n)),
+    );
+    if offenders.is_empty() {
+        return;
+    }
+    offenders.sort_unstable();
+    offenders.dedup();
+    r.error(
+        "network.full_with_secrets",
+        "network.mode",
+        format!(
+            "network mode is `full` (unrestricted egress, and host-based allowlisting is not \
+             yet enforced) while the environment forwards what looks like credential(s): {}. \
+             A compromised or prompt-injected process in this sandbox can exfiltrate them to \
+             any host. Use `network.mode = \"none\"` or `\"loopback\"`, or remove these \
+             variables from `[env]`, before running this profile.",
+            offenders.join(", ")
+        ),
+    );
 }
 
 fn validate_resources(profile: &Profile, r: &mut ValidationReport) {
@@ -310,6 +377,36 @@ mod tests {
         let report = validate(&p);
         assert!(!report.is_valid());
         assert!(report.errors().any(|d| d.code == "memory.zero"));
+    }
+
+    #[test]
+    fn flags_full_network_with_api_key_env() {
+        let mut p = Profile::default();
+        p.network.mode = NetworkMode::Full;
+        p.env.allow.push("ANTHROPIC_API_KEY".into());
+        let report = validate(&p);
+        assert!(!report.is_valid(), "{:?}", report.diagnostics);
+        assert!(report
+            .errors()
+            .any(|d| d.code == "network.full_with_secrets"));
+    }
+
+    #[test]
+    fn full_network_alone_is_only_a_warning() {
+        let mut p = Profile::default();
+        p.network.mode = NetworkMode::Full;
+        let report = validate(&p);
+        assert!(report.is_valid(), "{:?}", report.diagnostics);
+        assert!(report.warnings().any(|d| d.code == "network.full"));
+    }
+
+    #[test]
+    fn full_network_with_non_secret_env_is_fine() {
+        let mut p = Profile::default();
+        p.network.mode = NetworkMode::Full;
+        p.env.allow.push("EDITOR".into());
+        let report = validate(&p);
+        assert!(report.is_valid(), "{:?}", report.diagnostics);
     }
 
     #[test]

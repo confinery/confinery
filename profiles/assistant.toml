@@ -17,8 +17,20 @@ deny = [
 ]
 
 [network]
-# Assistants usually need to reach a model API. Set to "none" for offline work.
-mode = "full"
+# Assistants usually need to reach a model API. `loopback` is the safe
+# default: it does not give the sandboxed process real internet access, so
+# it will not actually reach api.anthropic.com/api.openai.com as shipped.
+#
+# Setting this to "full" opens unrestricted, unmonitored egress -- and this
+# profile forwards ANTHROPIC_API_KEY/OPENAI_API_KEY below, so a compromised
+# or prompt-injected process could exfiltrate them to any host. Host-based
+# allowlisting (restricting egress to just the model API's hosts) is not
+# yet enforced in-kernel (see docs/security-model.md), so there is
+# currently no middle ground between this and `full`. `confinery profile
+# validate` refuses to run this combination as an error, not a warning, for
+# exactly that reason -- if you switch this to "full", remove the API key
+# variables from [env] below, or accept that tradeoff deliberately.
+mode = "loopback"
 
 [resources]
 memory = "4GiB"
