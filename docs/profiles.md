@@ -32,6 +32,8 @@ minimal_dev = true                            # expose null, zero, random, tty, 
 
 Defaults expose common system directories read-only, a `/tmp` tmpfs, and mask `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.kube`, `~/.docker/config.json`, and `/etc/shadow`. Nothing is writable by default.
 
+On distros using the usr-merge layout, `/bin`, `/sbin`, `/lib`, and `/lib64` are symlinks into `/usr`. Listing one of them in `read_only`/`read_write` without also listing `/usr` produces a dangling symlink inside the sandbox rather than an error -- the tool you expected at `/bin/sh` simply won't be there. The default and shipped-template lists always include `/usr` alongside the others for this reason; if you trim a profile down, keep them together.
+
 ## `[network]`
 
 ```toml
@@ -103,6 +105,8 @@ allow = ["python3", "node", "git"]   # empty = any command
 ```
 
 Checked against the command's basename before the sandbox starts.
+
+**This is a usability guard, not a security boundary.** It only checks the program named on the command line -- an allowed interpreter (`python3`, `bash`, ...) can still `exec`/spawn anything else once running, unaffected by this list. The syscall, capability, filesystem, and network layers are what actually confine the process; `[tools]` exists to catch "wrong command" mistakes early, not to restrict what a running program can do.
 
 ## Built-in templates
 

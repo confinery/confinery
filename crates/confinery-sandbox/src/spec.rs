@@ -64,9 +64,21 @@ fn home_dir() -> PathBuf {
     let key = "USERPROFILE";
     #[cfg(not(windows))]
     let key = "HOME";
-    std::env::var_os(key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+    match std::env::var_os(key) {
+        Some(home) => PathBuf::from(home),
+        None => {
+            // `~`-prefixed profile paths -- including the default `deny`
+            // list (`~/.ssh`, `~/.aws`, ...) -- expand against this value.
+            // Falling back to "/" silently turns `~/.ssh` into `/.ssh`,
+            // which won't exist, so the masking that's supposed to protect
+            // real credentials quietly does nothing instead of erroring.
+            tracing::warn!(
+                "{key} is not set; `~`-prefixed profile paths (including the default `deny` \
+                 list protecting ~/.ssh, ~/.aws, etc.) will not resolve to anything real"
+            );
+            PathBuf::from("/")
+        }
+    }
 }
 
 /// Tiny UUID-v4 generator to avoid a heavy dependency in the sandbox crate.
