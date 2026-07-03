@@ -11,6 +11,9 @@ use seccompiler::{
 use super::syscall_table;
 use crate::error::{Result, SandboxError};
 
+// seccompiler only supports these two architectures, so this is a hard
+// build-time restriction, not a runtime fallback: Confinery does not build
+// on other Linux architectures at all. See docs/platform-support.md.
 #[cfg(target_arch = "x86_64")]
 const TARGET_ARCH: TargetArch = TargetArch::x86_64;
 #[cfg(target_arch = "aarch64")]

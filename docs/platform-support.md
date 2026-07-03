@@ -22,6 +22,17 @@ cgroup limits usually need root or a systemd user slice with delegation. Without
 
 Kernels 5.13+ are recommended for full Landlock; namespaces and seccomp work further back. WSL2 is supported and used to develop Confinery.
 
+### CPU architecture
+
+The seccomp filter compiler only targets `x86_64` and `aarch64` -- the two
+architectures `seccompiler` (and this project's own release pipeline)
+support. Confinery does not build at all on other Linux architectures
+(32-bit ARM, RISC-V, etc.); this is a build-time limitation, not a
+runtime fallback, since `rust-toolchain.toml` only installs the
+`x86_64-unknown-linux-musl` target. Namespaces, Landlock, and cgroups have
+no such restriction and would work on any architecture the kernel
+supports; only the seccomp compilation step is narrowed.
+
 ## Windows
 
 A Job Object backend provides:
