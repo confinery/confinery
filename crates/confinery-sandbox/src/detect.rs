@@ -269,10 +269,13 @@ mod windows {
             "job_object",
             "process resource limits available",
         ));
-        features.push(Feature::yes(
-            "restricted_token",
-            "least-privilege token supported",
-        ));
+        // Deliberately no "restricted_token" entry here: nothing in the
+        // Windows backend actually creates a restricted token or lowers
+        // the process integrity level today (see docs/security-model.md's
+        // Known limits) -- the sandboxed process keeps the full token of
+        // the invoking user. A previous version of this detector claimed
+        // this capability unconditionally with no code behind it at all;
+        // `confinery doctor` must never assert a boundary that isn't real.
 
         let wsl = std::path::Path::new(r"C:\Windows\System32\wsl.exe").exists();
         features.push(if wsl {
