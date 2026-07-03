@@ -24,7 +24,11 @@ allow = [
 confidence-threshold = 0.9
 
 [bans]
-multiple-versions = "warn"
+# The dependency graph is clean of duplicate versions today (verified with
+# `cargo tree -d`, including --all-features and the Windows target); deny
+# rather than warn so a future dependency bump that introduces one is a
+# build failure to fix, not a warning to eventually notice.
+multiple-versions = "deny"
 wildcards = "warn"
 
 [sources]
