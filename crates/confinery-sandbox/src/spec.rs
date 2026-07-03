@@ -87,8 +87,12 @@ mod uuid_lite {
 
     /// Generate a random-ish 128-bit id rendered as a hyphenated hex string.
     ///
-    /// This is used only to correlate audit records, so a cheap seed mixing
-    /// time, pid, and address entropy is sufficient.
+    /// This is used only to correlate audit records for one run, so a cheap
+    /// seed mixing time, pid, and address entropy is sufficient -- it is
+    /// NOT cryptographically unpredictable. Do not reuse this for anything
+    /// where that property matters (tokens, capability handles, anything
+    /// used in a security decision); reach for a real CSPRNG-backed crate
+    /// for those instead.
     pub fn new_id() -> String {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
