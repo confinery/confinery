@@ -13,6 +13,25 @@ fn write_profile(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::
     path
 }
 
+/// Whether this host actually supports Confinery's `isolate` (namespace)
+/// plan, per `confinery doctor`. Sysctls alone are not a reliable signal --
+/// some CI hosts (notably GitHub Actions' `ubuntu-latest`, which enables an
+/// AppArmor policy restricting unprivileged user namespaces by default)
+/// pass the static checks but still deny the operation at runtime, which is
+/// exactly what `confinery doctor` now probes for directly. Tests that are
+/// specific to the mount-namespace/pivot_root mechanism must check this and
+/// skip gracefully rather than fail on such a host, per this project's own
+/// testing rule ("Isolation tests must degrade gracefully on hosts that
+/// lack a feature", CONTRIBUTING.md).
+#[cfg(target_os = "linux")]
+fn namespaces_available() -> bool {
+    let out = confinery().arg("doctor").assert().success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    stdout
+        .lines()
+        .any(|l| l.contains("user_namespaces") && l.trim_start().starts_with("[ok"))
+}
+
 #[test]
 fn doctor_reports_platform() {
     confinery()
@@ -147,8 +166,12 @@ fn invalid_profile_blocks_run() {
         .stderr(predicate::str::contains("validation"));
 }
 
-// Actually launches a process under isolation. Requires unprivileged user
-// namespaces (available on GitHub-hosted Ubuntu runners).
+// Actually launches a process under isolation. `--isolation auto` (the
+// default) degrades to the `confine` plan when the host's `isolate` plan
+// isn't usable -- including hosts that pass the static namespace sysctls
+// but still deny it at runtime, such as GitHub Actions' `ubuntu-latest`
+// runners (see the `detect::userns_actually_works` probe) -- so this test
+// intentionally does not force a specific isolation mode.
 #[cfg(target_os = "linux")]
 #[test]
 fn runs_a_command_in_the_sandbox() {
@@ -161,10 +184,19 @@ fn runs_a_command_in_the_sandbox() {
 
 // Regression test for the `deny` masking fix: a denied path bound in through
 // an allowed parent must actually be unreadable inside the sandbox, not just
-// "masked if the mount happens to succeed".
+// "masked if the mount happens to succeed". This exercises the mount/
+// pivot_root mechanism specifically (Landlock, used by the `confine`
+// fallback, cannot carve a denied child out of an allowed parent at all --
+// that is a documented, intentional difference between the two plans, not
+// something this test should be asserting on), so it forces `isolate` mode
+// and skips on hosts where that plan genuinely isn't available.
 #[cfg(target_os = "linux")]
 #[test]
 fn deny_list_masks_secret_file_contents() {
+    if !namespaces_available() {
+        eprintln!("skipping: isolate (namespace) mode unavailable on this host");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let ro = dir.path().join("ro");
     std::fs::create_dir_all(&ro).unwrap();
@@ -183,7 +215,7 @@ fn deny_list_masks_secret_file_contents() {
     let path = write_profile(&dir, "deny.toml", &profile);
 
     confinery()
-        .args(["run", "--profile"])
+        .args(["run", "--isolation", "namespaces", "--profile"])
         .arg(&path)
         .args(["--", "cat", secret.to_str().unwrap()])
         .assert()
@@ -192,10 +224,16 @@ fn deny_list_masks_secret_file_contents() {
 
 // Regression test for the read-only-remount fix: a `read_only` path must
 // actually reject writes inside the sandbox, and the fix must not silently
-// let the write through.
+// let the write through. Specific to the mount/pivot_root mechanism (see
+// the comment on `deny_list_masks_secret_file_contents`), so it forces
+// `isolate` mode and skips where that plan isn't available.
 #[cfg(target_os = "linux")]
 #[test]
 fn read_only_paths_reject_writes() {
+    if !namespaces_available() {
+        eprintln!("skipping: isolate (namespace) mode unavailable on this host");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let ro = dir.path().join("ro");
     std::fs::create_dir_all(&ro).unwrap();
@@ -213,7 +251,7 @@ fn read_only_paths_reject_writes() {
     let path = write_profile(&dir, "ro.toml", &profile);
 
     confinery()
-        .args(["run", "--profile"])
+        .args(["run", "--isolation", "namespaces", "--profile"])
         .arg(&path)
         .args([
             "--",

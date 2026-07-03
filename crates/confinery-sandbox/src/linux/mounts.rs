@@ -359,6 +359,15 @@ mod tests {
         );
     }
 
+    // Exit codes for `check_recursive_readonly`, distinguishing "the
+    // environment can't even set up the namespace" (skip -- not what this
+    // test is about) from "the read-only guarantee itself didn't hold"
+    // (real failure). Some hosts pass the static namespace sysctls but
+    // still deny the operation at runtime (e.g. GitHub Actions'
+    // `ubuntu-latest`, which restricts unprivileged user namespaces via
+    // AppArmor by default) -- see `detect::userns_actually_works`.
+    const SETUP_UNAVAILABLE: i32 = 2;
+
     // Regression test for the recursive-read-only fix: a submount nested
     // under a read-only path must become read-only too, not just the top
     // of the bind mount. Runs the actual check in a disposable, unprivileged
@@ -371,7 +380,11 @@ mod tests {
             0 => {
                 let code = match check_recursive_readonly() {
                     Ok(()) => 0,
-                    Err(e) => {
+                    Err(SetupError::Unavailable(e)) => {
+                        eprintln!("namespace setup unavailable: {e}");
+                        SETUP_UNAVAILABLE
+                    }
+                    Err(SetupError::Failed(e)) => {
                         eprintln!("check_recursive_readonly: {e}");
                         1
                     }
@@ -381,6 +394,12 @@ mod tests {
             pid => {
                 let mut status: libc::c_int = 0;
                 unsafe { libc::waitpid(pid, &mut status, 0) };
+                if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == SETUP_UNAVAILABLE {
+                    eprintln!(
+                        "skipping: unprivileged user+mount namespaces unavailable on this host"
+                    );
+                    return;
+                }
                 assert!(
                     libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
                     "recursive read-only check failed in child (status {status})"
@@ -389,15 +408,33 @@ mod tests {
         }
     }
 
-    fn check_recursive_readonly() -> io::Result<()> {
+    enum SetupError {
+        /// The namespace/uid-mapping setup itself failed -- not what this
+        /// test is checking, and known to happen on hosts whose sysctls
+        /// allow it but an LSM policy denies it anyway.
+        Unavailable(io::Error),
+        /// Setup succeeded but the actual check failed.
+        Failed(io::Error),
+    }
+
+    impl From<io::Error> for SetupError {
+        fn from(e: io::Error) -> Self {
+            SetupError::Failed(e)
+        }
+    }
+
+    fn check_recursive_readonly() -> Result<(), SetupError> {
         use nix::sched::{unshare, CloneFlags};
 
         let uid = nix::unistd::getuid();
         let gid = nix::unistd::getgid();
-        unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS).map_err(io::Error::from)?;
+        unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS)
+            .map_err(|e| SetupError::Unavailable(io::Error::from(e)))?;
         let _ = std::fs::write("/proc/self/setgroups", b"deny");
-        std::fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))?;
-        std::fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))?;
+        std::fs::write("/proc/self/uid_map", format!("0 {uid} 1\n"))
+            .map_err(SetupError::Unavailable)?;
+        std::fs::write("/proc/self/gid_map", format!("0 {gid} 1\n"))
+            .map_err(SetupError::Unavailable)?;
 
         let outer = tempfile::tempdir()?;
         let sub = outer.path().join("sub");
@@ -422,12 +459,13 @@ mod tests {
 
         remount_readonly(outer.path())?;
 
-        match std::fs::write(sub.join("f"), b"overwritten") {
+        let result: io::Result<()> = match std::fs::write(sub.join("f"), b"overwritten") {
             Ok(()) => Err(io::Error::other(
                 "submount under the read-only path was still writable",
             )),
             Err(e) if e.raw_os_error() == Some(libc::EROFS) => Ok(()),
             Err(e) => Err(e),
-        }
+        };
+        result.map_err(SetupError::Failed)
     }
 }
