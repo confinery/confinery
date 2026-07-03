@@ -13,6 +13,25 @@ fn write_profile(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::
     path
 }
 
+/// A tempdir suitable for use as a sandboxed `read_only`/`read_write`/`deny`
+/// path -- i.e. *not* under `/tmp`. Confinery's own mount setup stages its
+/// new root by mounting a fresh tmpfs directly onto `/tmp` before it
+/// processes the filesystem allowlist, which silently shadows the host's
+/// real `/tmp` (and anything under it, including whatever
+/// `tempfile::tempdir()`'s default location would produce) for the rest of
+/// that setup. A profile pointing at a path under `/tmp` doesn't fail --
+/// `bind_path` treats "doesn't exist here" as a silent no-op, matching its
+/// handling of any other absent host path -- so a test built on one can
+/// pass for the wrong reason (the command fails because the path was never
+/// bound at all, not because a boundary it's supposed to test rejected
+/// something). `CARGO_TARGET_TMPDIR` is Cargo's own answer to exactly this
+/// class of problem for test binaries.
+fn non_tmp_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap()
+}
+
 /// Whether this host actually supports Confinery's `isolate` (namespace)
 /// plan, per `confinery doctor`. Sysctls alone are not a reliable signal --
 /// some CI hosts (notably GitHub Actions' `ubuntu-latest`, which enables an
@@ -197,7 +216,7 @@ fn deny_list_masks_secret_file_contents() {
         eprintln!("skipping: isolate (namespace) mode unavailable on this host");
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = non_tmp_tempdir();
     let ro = dir.path().join("ro");
     std::fs::create_dir_all(&ro).unwrap();
     let secret = ro.join("secret");
@@ -214,12 +233,73 @@ fn deny_list_masks_secret_file_contents() {
     );
     let path = write_profile(&dir, "deny.toml", &profile);
 
+    // `.success()` matters as much as the content check: if the path were
+    // never bound at all (e.g. it lived somewhere Confinery's own setup
+    // shadows), `cat` would fail for an unrelated reason and the "does not
+    // contain the secret" assertion would pass for the wrong reason.
     confinery()
         .args(["run", "--isolation", "namespaces", "--profile"])
         .arg(&path)
         .args(["--", "cat", secret.to_str().unwrap()])
         .assert()
+        .success()
         .stdout(predicate::str::contains("topsecret-value").not());
+}
+
+// Regression test for the symlink-safe masking fix: a `deny` entry that
+// names a symlink must mask the symlink node itself, not follow it and mask
+// whatever it points to -- especially when that target is *also* separately
+// reachable through another allowed path, which is exactly the case a naive
+// path-based mount() gets wrong (it follows the link and masks the wrong
+// location, leaving the symlink fully readable). Confirmed manually before
+// writing this test: reverting the fix makes this test fail with the real
+// secret content on stdout.
+#[cfg(target_os = "linux")]
+#[test]
+fn deny_masks_symlink_without_leaking_its_separately_allowed_target() {
+    if !namespaces_available() {
+        eprintln!("skipping: isolate (namespace) mode unavailable on this host");
+        return;
+    }
+    let dir = non_tmp_tempdir();
+    let ro = dir.path().join("ro");
+    let other = dir.path().join("other");
+    std::fs::create_dir_all(&ro).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let real = other.join("real-secret.txt");
+    std::fs::write(&real, "leaked-secret-content").unwrap();
+    let link = ro.join("secret-link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let profile = format!(
+        "name = \"symlink-deny-test\"\n\
+         [filesystem]\n\
+         read_only = [\"/usr\", \"/bin\", \"/lib\", \"/lib64\", {:?}, {:?}]\n\
+         deny = [{:?}]\n\
+         [network]\n\
+         mode = \"none\"\n",
+        ro, other, link
+    );
+    let path = write_profile(&dir, "symlink-deny.toml", &profile);
+
+    // The symlink itself must be masked...
+    confinery()
+        .args(["run", "--isolation", "namespaces", "--profile"])
+        .arg(&path)
+        .args(["--", "cat", link.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("leaked-secret-content").not());
+
+    // ...without over-masking the target, which is legitimately allowed via
+    // its own separate, non-denied path.
+    confinery()
+        .args(["run", "--isolation", "namespaces", "--profile"])
+        .arg(&path)
+        .args(["--", "cat", real.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("leaked-secret-content"));
 }
 
 // Regression test for the read-only-remount fix: a `read_only` path must
@@ -234,7 +314,7 @@ fn read_only_paths_reject_writes() {
         eprintln!("skipping: isolate (namespace) mode unavailable on this host");
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = non_tmp_tempdir();
     let ro = dir.path().join("ro");
     std::fs::create_dir_all(&ro).unwrap();
     let target = ro.join("public.txt");
@@ -249,6 +329,17 @@ fn read_only_paths_reject_writes() {
         ro
     );
     let path = write_profile(&dir, "ro.toml", &profile);
+
+    // Prove the path is actually bound and readable first: otherwise a
+    // write failing because the path doesn't exist at all would pass this
+    // test for the wrong reason (see `non_tmp_tempdir`).
+    confinery()
+        .args(["run", "--isolation", "namespaces", "--profile"])
+        .arg(&path)
+        .args(["--", "cat", target.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("original"));
 
     confinery()
         .args(["run", "--isolation", "namespaces", "--profile"])

@@ -6,6 +6,8 @@
 //! namespace has been entered.
 
 use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
@@ -226,6 +228,9 @@ impl MountPlan {
             Err(e) => return Err(e),
         };
         if meta.is_dir() {
+            // `symlink_metadata` never follows links, so reaching this
+            // branch means `target` is a real directory, not a symlink to
+            // one -- safe to mount over by path directly.
             mount(
                 Some("tmpfs"),
                 &target,
@@ -235,7 +240,21 @@ impl MountPlan {
             )
             .map_err(mount_err("mask-dir"))
         } else if PathBuf::from("/dev/null").exists() {
-            mount(Some("/dev/null"), &target, NONE, MsFlags::MS_BIND, NONE)
+            // `target` may itself be a symlink (e.g. if a `deny` entry
+            // happens to name one) whose real destination lies outside the
+            // sandbox's mount tree entirely. Mounting over the path
+            // normally would follow it and mask the wrong location,
+            // silently leaving the named path itself untouched. Opening it
+            // as an `O_PATH|O_NOFOLLOW` fd first and mounting via
+            // `/proc/self/fd` masks exactly the node the deny list named,
+            // symlink or not, regardless of where it points.
+            let fd = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&target)
+                .map_err(|e| io::Error::new(e.kind(), format!("mask-file-open: {e}")))?;
+            let via_fd = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
+            mount(Some("/dev/null"), &via_fd, NONE, MsFlags::MS_BIND, NONE)
                 .map_err(mount_err("mask-file"))
         } else {
             Err(io::Error::other(format!(
