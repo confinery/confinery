@@ -14,8 +14,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  guard:
+    name: verify release ref
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a version tag
+        # `workflow_dispatch` can be run against any branch, not just a
+        # tag -- without this check, a manual dispatch off `main` would
+        # build, sign, and publish a "release" named after a branch
+        # (GITHUB_REF_NAME feeds directly into the package/asset names
+        # below), with no tagged commit backing it.
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::Refusing to release from ref_type='${{ github.ref_type }}' (ref='${{ github.ref_name }}'). Push a version tag (e.g. v1.2.3) instead of dispatching this workflow against a branch." >&2
+            exit 1
+          fi
+
   build:
     name: build ${{ matrix.target }}
+    needs: guard
     strategy:
       fail-fast: false
       matrix:
