@@ -39,9 +39,17 @@
 //! and the `loopback`/`allowlist` network modes (which have no
 //! single-flag OCI equivalent -- a container's default network, active
 //! for anything other than `none`, is an unfiltered NAT, not a
-//! confinery-style allowlist). This has not been run against a real `wslc`
-//! preview install; treat it as a starting point to verify on real
-//! hardware, not a finished, load-bearing boundary.
+//! confinery-style allowlist).
+//!
+//! Confirmed against a real preview install (2026-07): `wslc.exe` is a
+//! native Windows binary at `C:\Program Files\WSL\wslc.exe`, not a script
+//! shim, spawned directly rather than through `wsl.exe` (two wrong
+//! assumptions that shipped and were corrected here first -- a guessed
+//! `C:\Windows\System32\wslc.exe` path, then an unfounded guess that it
+//! only resolved inside a WSL shell). Still **not confirmed**: the actual
+//! behavior of a real `wslc run` invocation with these flags -- treat the
+//! argument-building logic as a verified-reachable starting point, not a
+//! finished, load-bearing boundary.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -56,8 +64,6 @@ use crate::report::{LayerOutcome, SandboxReport};
 use crate::spec::SandboxSpec;
 use crate::Sandbox;
 
-const WSLC_PATH: &str = r"C:\Windows\System32\wslc.exe";
-
 /// The `wslc`-backed sandbox engine.
 pub(crate) struct WslcSandbox;
 
@@ -66,11 +72,25 @@ impl WslcSandbox {
         WslcSandbox
     }
 
-    /// Whether `wslc.exe` is present on this host. Presence alone, same as
-    /// the `wsl2`/`windows_sandbox` checks in `detect.rs` -- doesn't mean a
-    /// profile has opted in via `windows.container_image`.
+    /// Whether `wslc` is available on this host.
+    ///
+    /// A fixed `C:\Windows\System32\wslc.exe` path shipped here first,
+    /// guessed by analogy with `wsl.exe`'s long-stable location --
+    /// confirmed wrong against a real preview install: `where wslc` on a
+    /// real machine resolves to `C:\Program Files\WSL\wslc.exe`, a genuine
+    /// native binary rather than a script shim, reachable through the
+    /// ordinary Windows PATH (which is also why it resolves from inside a
+    /// WSL shell too -- WSL imports the Windows PATH by default). So a
+    /// plain PATH-based spawn is both correct and sufficient; no need to
+    /// route through `wsl.exe`. Runs the documented `wslc version` check
+    /// from Microsoft's own tutorial.
     pub fn is_available() -> bool {
-        std::path::Path::new(WSLC_PATH).exists()
+        Command::new("wslc")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 }
 
@@ -152,7 +172,7 @@ impl Sandbox for WslcSandbox {
         }
 
         let start = Instant::now();
-        let mut child = Command::new(WSLC_PATH)
+        let mut child = Command::new("wslc")
             .args(&args)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -219,11 +239,14 @@ fn build_wslc_args(spec: &SandboxSpec, workdir: &std::path::Path) -> Result<Vec<
 
     let mut args = vec!["run".to_string(), "--rm".to_string()];
 
-    // Host-side path syntax assumes wslc, like Docker Desktop on Windows,
-    // parses a drive-letter colon (`C:\...`) specially rather than as the
-    // HOST:CONTAINER separator -- unverified against a real install (see
-    // module docs), but it's the same ambiguity Docker itself solved this
-    // way, and wslc is explicitly Docker-CLI-compatible.
+    // `wslc.exe` is a native Windows binary (confirmed: `where wslc` on a
+    // real install resolves to `C:\Program Files\WSL\wslc.exe`), invoked
+    // directly rather than through `wsl.exe` -- so the mount source stays
+    // a plain Windows path. Assumes wslc, like Docker Desktop on Windows,
+    // parses the drive-letter colon (`C:\...`) specially rather than as
+    // the HOST:CONTAINER separator; unverified against a real `wslc run`
+    // (see module docs), but it's the same ambiguity Docker itself solved
+    // this way, and wslc is explicitly Docker-CLI-compatible.
     args.push("-v".to_string());
     args.push(format!("{}:/workspace", workdir.display()));
     args.push("-w".to_string());

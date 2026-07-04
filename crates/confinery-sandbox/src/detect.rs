@@ -294,13 +294,19 @@ mod windows {
         // `wslc` (WSL Containers) is a Microsoft public preview (2026-07):
         // real OCI Linux containers from Windows, no Docker Desktop
         // needed. Used by the `wslc` backend (see windows/wslc.rs) when a
-        // profile sets `windows.container_image` -- presence here only
-        // means the binary exists, not that the profile opted in.
+        // profile sets `windows.container_image` -- a successful check
+        // here only means `wslc` runs, not that the profile opted in.
         let wslc = crate::windows::wslc::WslcSandbox::is_available();
         features.push(if wslc {
-            Feature::yes("wslc", "wslc.exe present (WSL Containers, public preview)")
+            Feature::yes(
+                "wslc",
+                "`wslc version` ran successfully (WSL Containers, public preview)",
+            )
         } else {
-            Feature::no("wslc", "wslc.exe not found (needs `wsl --update`)")
+            Feature::no(
+                "wslc",
+                "`wslc` did not run (needs `wsl --update`, or not on PATH)",
+            )
         });
 
         HostCapabilities {

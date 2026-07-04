@@ -61,8 +61,9 @@ impl Sandbox for WindowsSandbox {
             if !wslc::WslcSandbox::is_available() {
                 return Err(SandboxError::layer(
                     "setup",
-                    "windows.container_image is set but wslc.exe was not found on this host \
-                     (needs a WSL Containers preview build -- run `wsl --update`; see \
+                    "windows.container_image is set but `wslc version` did not run \
+                     successfully on this host (needs a WSL Containers preview build -- run \
+                     `wsl --update`, and confirm `wslc` works from a plain terminal; see \
                      `confinery doctor`)",
                 ));
             }
