@@ -1,5 +1,9 @@
 # Confinery
 
+[![CI](https://github.com/confinery/confinery/actions/workflows/ci.yml/badge.svg)](https://github.com/confinery/confinery/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/confinery-cli.svg)](https://crates.io/crates/confinery-cli)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Confinery runs a command inside a locked-down sandbox. It's built for wrapping AI assistants and the tools they invoke, so a coding agent can work in a project without reaching your SSH keys, cloud credentials, or the wider system.
 
 One static binary, Linux and Windows. Isolation is layered and fails closed: each defence is independent, so a gap in one does not open the box.
@@ -29,7 +33,11 @@ Policy lives in `confinery-core` with no OS calls. `confinery-sandbox` turns it 
 
 ## Install
 
-Download a signed binary from the [releases page](https://github.com/confinery/confinery/releases), or build from source:
+```
+cargo install confinery-cli
+```
+
+Or download a signed binary from the [releases page](https://github.com/confinery/confinery/releases), or build from source:
 
 ```
 cargo build --release -p confinery-cli
@@ -133,6 +141,7 @@ CI and signed releases run entirely through GitHub Actions ([.github/workflows](
 - [Security model](docs/security-model.md) — the layers and their limits
 - [Profiles](docs/profiles.md) — every field, with examples
 - [Platform support](docs/platform-support.md) — what works where
+- [Changelog](CHANGELOG.md) — what changed in each release
 
 ## Status
 

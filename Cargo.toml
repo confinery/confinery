@@ -9,6 +9,7 @@ rust-version = "1.82"
 license = "Apache-2.0"
 repository = "https://github.com/confinery/confinery"
 homepage = "https://github.com/confinery/confinery"
+readme = "README.md"
 authors = ["Confinery contributors"]
 description = "Securely sandbox (confinery) AI assistants with layered OS isolation"
 keywords = ["sandbox", "security", "seccomp", "landlock", "isolation"]
