@@ -419,11 +419,19 @@ const SECCOMP_IOC_MAGIC: u32 = 0x21;
 const IOC_READ: u32 = 2;
 const IOC_WRITE: u32 = 1;
 
-const fn ioc(dir: u32, nr: u32, size: usize) -> libc::c_ulong {
-    ((dir << 30) | (SECCOMP_IOC_MAGIC << 8) | nr | ((size as u32) << 16)) as libc::c_ulong
+// `libc::ioctl`'s request parameter is `libc::Ioctl`, which is NOT the same
+// type on every libc this project targets: `c_ulong` on glibc, but `c_int`
+// on musl (see `linux_like::linux::musl` vs `linux_like::linux::gnu` in the
+// `libc` crate source). Building the request code as that alias -- rather
+// than hardcoding `c_ulong` -- keeps this correct on both without needing a
+// fallible `try_into` at every call site: the bit pattern for these ioctl
+// numbers fits in 32 bits (the encoding's widest field is the `dir` bits at
+// `<< 30`), so a plain `as` reinterpretation is exact both ways.
+const fn ioc(dir: u32, nr: u32, size: usize) -> libc::Ioctl {
+    ((dir << 30) | (SECCOMP_IOC_MAGIC << 8) | nr | ((size as u32) << 16)) as libc::Ioctl
 }
 
-fn seccomp_ioctl_notif_recv() -> libc::c_ulong {
+fn seccomp_ioctl_notif_recv() -> libc::Ioctl {
     ioc(
         IOC_READ | IOC_WRITE,
         0,
@@ -431,7 +439,7 @@ fn seccomp_ioctl_notif_recv() -> libc::c_ulong {
     )
 }
 
-fn seccomp_ioctl_notif_send() -> libc::c_ulong {
+fn seccomp_ioctl_notif_send() -> libc::Ioctl {
     ioc(
         IOC_READ | IOC_WRITE,
         1,
@@ -439,7 +447,7 @@ fn seccomp_ioctl_notif_send() -> libc::c_ulong {
     )
 }
 
-fn seccomp_ioctl_notif_id_valid() -> libc::c_ulong {
+fn seccomp_ioctl_notif_id_valid() -> libc::Ioctl {
     ioc(IOC_WRITE, 2, std::mem::size_of::<u64>())
 }
 
