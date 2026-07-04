@@ -11,6 +11,7 @@ use crate::filesystem::FilesystemPolicy;
 use crate::network::NetworkPolicy;
 use crate::resources::ResourceLimits;
 use crate::syscalls::SyscallPolicy;
+use crate::windows::WindowsPolicy;
 
 /// Executable allowlist. An empty list allows any command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -72,6 +73,11 @@ pub struct Profile {
 
     #[serde(default)]
     pub tools: ToolPolicy,
+
+    /// Opt-in settings for Windows-only backends (currently just `wslc`).
+    /// Meaningless -- and harmless -- on every other platform.
+    #[serde(default)]
+    pub windows: WindowsPolicy,
 }
 
 impl Default for Profile {
@@ -86,6 +92,7 @@ impl Default for Profile {
             syscalls: SyscallPolicy::default(),
             env: EnvPolicy::default(),
             tools: ToolPolicy::default(),
+            windows: WindowsPolicy::default(),
         }
     }
 }
@@ -200,6 +207,23 @@ mod tests {
     fn empty_tool_allowlist_permits_anything() {
         let tools = ToolPolicy::default();
         assert!(tools.allows("anything"));
+    }
+
+    #[test]
+    fn windows_container_image_round_trips_through_toml() {
+        let mut p = Profile::default();
+        p.windows.container_image = Some("node:20".to_string());
+        let toml = p.to_toml_string().unwrap();
+        assert!(toml.contains("container_image"));
+        let back = Profile::from_toml_str(&toml).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn windows_section_is_absent_by_default() {
+        let p = Profile::default();
+        let toml = p.to_toml_string().unwrap();
+        assert!(!toml.contains("container_image"));
     }
 
     #[test]

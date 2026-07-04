@@ -15,6 +15,7 @@ pub mod profile;
 pub mod resources;
 pub mod syscalls;
 pub mod units;
+pub mod windows;
 
 pub use error::{CoreError, Result};
 pub use profile::Profile;

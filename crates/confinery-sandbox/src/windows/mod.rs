@@ -34,6 +34,8 @@ use crate::report::{LayerOutcome, SandboxReport};
 use crate::spec::SandboxSpec;
 use crate::Sandbox;
 
+pub(crate) mod wslc;
+
 /// The Windows sandbox engine.
 pub struct WindowsSandbox;
 
@@ -49,6 +51,24 @@ impl Sandbox for WindowsSandbox {
     }
 
     fn run(&self, spec: &SandboxSpec, auditor: &mut Auditor) -> Result<SandboxReport> {
+        // `windows.container_image` opts a profile into the `wslc`
+        // (WSL Containers) backend instead of this one -- see
+        // windows/wslc.rs for why that's a real, opt-in choice rather than
+        // an automatic upgrade. Checked before anything else here so the
+        // Job Object path below never partially runs for a profile that
+        // asked for containers instead.
+        if spec.profile.windows.container_image.is_some() {
+            if !wslc::WslcSandbox::is_available() {
+                return Err(SandboxError::layer(
+                    "setup",
+                    "windows.container_image is set but wslc.exe was not found on this host \
+                     (needs a WSL Containers preview build -- run `wsl --update`; see \
+                     `confinery doctor`)",
+                ));
+            }
+            return wslc::WslcSandbox::new().run(spec, auditor);
+        }
+
         let program = spec.program()?.to_string();
         spec.check_tool_allowed()?;
 
@@ -110,6 +130,7 @@ impl Sandbox for WindowsSandbox {
         if spec.dry_run {
             return Ok(SandboxReport {
                 id: spec.id.clone(),
+                backend: self.backend(),
                 exit_code: None,
                 signal: None,
                 duration: Duration::ZERO,
@@ -172,6 +193,7 @@ impl Sandbox for WindowsSandbox {
 
         Ok(SandboxReport {
             id: spec.id.clone(),
+            backend: self.backend(),
             exit_code,
             signal: None,
             duration,

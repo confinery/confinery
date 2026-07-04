@@ -42,7 +42,24 @@ A Job Object backend provides:
 - UI restrictions (no desktop, clipboard, or global atoms),
 - environment filtering.
 
-Filesystem and network confinement are **not** implemented on the native Job Object backend. For those, run Confinery inside a WSL2 distribution (full Linux isolation) or use Windows Sandbox. `confinery doctor` reports whether `wsl.exe` and Windows Sandbox are present. Confinery marks unenforced layers as skipped rather than implying protection it does not provide.
+Filesystem and network confinement are **not** implemented on the native Job Object backend. For those, run Confinery inside a WSL2 distribution (full Linux isolation), use Windows Sandbox, or opt into the `wslc` backend below. `confinery doctor` reports whether `wsl.exe`, Windows Sandbox, and `wslc.exe` are present. Confinery marks unenforced layers as skipped rather than implying protection it does not provide.
+
+### `wslc` backend (experimental, preview-dependent)
+
+Setting `windows.container_image` in a profile switches `confinery run` from the Job Object backend to `wslc` (WSL Containers) -- a Microsoft *public preview* (announced 2026-07-02, GA targeted fall 2026) that runs real OCI Linux containers via a built-in `wslc.exe`, no Docker Desktop required. This gives genuine filesystem confinement (only the working directory is mounted, at `/workspace`) and network confinement (`network.mode = "none"` gets a real `--network none`), unlike the Job Object backend.
+
+```toml
+[windows]
+container_image = "node:20"  # any OCI image with a Linux build of your tool
+```
+
+Only run a command this way if it has a Linux build -- this executes it inside a Linux container, not as a native Windows process.
+
+**Preview caveats, read before relying on this:**
+
+- `wslc`'s CLI reference for resource limits and finer-grained network modes isn't fully published yet. This backend only wires the flags with strong, independently-corroborated evidence (`-v`, `-w`, `-e`, `--network none`); `[resources]` (memory/cpu/pids) is reported as *not enforced* here rather than guessing at unconfirmed flag syntax.
+- `network.mode` values other than `none` (`loopback`, `allowlist`, `full`) all fall through to the container runtime's default network (unfiltered NAT) -- there's no OCI-level equivalent of confinery's seccomp-based allowlist.
+- This has not been verified against a real `wslc` preview install (developed without Windows/WSL-preview access); treat it as a starting point, not a finished boundary. Cross-compiles and passes `clippy`/tests for the pure argument-building logic, but the actual `wslc run` invocation is unverified.
 
 ## Other platforms
 

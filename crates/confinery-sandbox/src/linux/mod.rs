@@ -224,6 +224,7 @@ impl Sandbox for LinuxSandbox {
             );
             return Ok(SandboxReport {
                 id: spec.id.clone(),
+                backend: self.backend(),
                 exit_code: None,
                 signal: None,
                 duration: Duration::ZERO,
@@ -419,6 +420,7 @@ impl Sandbox for LinuxSandbox {
 
         Ok(SandboxReport {
             id: spec.id.clone(),
+            backend: self.backend(),
             exit_code,
             signal,
             duration,

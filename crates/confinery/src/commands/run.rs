@@ -57,7 +57,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<i32> {
     let report = sandbox.run(&spec, &mut auditor)?;
 
     if args.dry_run {
-        print_plan(&report, sandbox.backend());
+        print_plan(&report, report.backend);
         return Ok(0);
     }
     if args.json {
@@ -96,6 +96,7 @@ fn report_json(report: &SandboxReport) -> String {
         .collect();
     let value = serde_json::json!({
         "id": report.id,
+        "backend": report.backend,
         "exit_code": report.exit_code,
         "signal": report.signal,
         "duration_ms": report.duration.as_millis(),

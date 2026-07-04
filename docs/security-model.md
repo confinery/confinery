@@ -62,7 +62,9 @@ cgroups v2 caps memory, CPU, and process count when the hierarchy is writable (r
 
 ## Windows layers
 
-A Job Object bounds committed memory and active process count, terminates the whole tree together (`KILL_ON_JOB_CLOSE`), and applies UI restrictions (no desktop, clipboard, or global atoms). The environment is filtered like every backend. Filesystem and network confinement require WSL2 or Windows Sandbox and are reported as not enforced — Confinery never claims a boundary it did not build.
+A Job Object bounds committed memory and active process count, terminates the whole tree together (`KILL_ON_JOB_CLOSE`), and applies UI restrictions (no desktop, clipboard, or global atoms). The environment is filtered like every backend. Filesystem and network confinement require WSL2, Windows Sandbox, or the `wslc` backend, and are otherwise reported as not enforced — Confinery never claims a boundary it did not build.
+
+Setting `windows.container_image` in a profile switches to the `wslc` backend (Microsoft's public-preview WSL Containers), running the command in a real OCI Linux container instead: the working directory is mounted read-write at `/workspace` and nothing else is visible, and `network.mode = "none"` gets a real `--network none`. `[resources]` limits and the `loopback`/`allowlist`/`full` network modes are not enforced by this backend — see [docs/platform-support.md](platform-support.md#wslc-backend-experimental-preview-dependent) for exactly what's confirmed vs. assumed about this preview's CLI, and for why it hasn't been verified against a real install.
 
 ## Defaults
 
@@ -75,6 +77,7 @@ Least privilege out of the box: no network, deny-by-default filesystem, all capa
 - `deny` masking is a mount-layer mechanism and only applies under the `isolate` plan. Landlock (the `confine` fallback's filesystem boundary) is an allowlist and cannot carve a denied child out of an allowed parent, so a `deny` entry has no effect when a host can't do namespaces.
 - Host-based network allowlisting (`network.mode = "allowlist"`) only intercepts `connect(2)`; a connectionless UDP flow (e.g. a DNS query via `sendto` on an unconnected socket) is not covered, so this does not by itself close a UDP/DNS-based exfiltration channel. Hostnames in `network.allow` are resolved once, at startup, against the *parent's* resolver — not re-resolved or pinned for the run, so it is not DNS-rebinding-proof. It also can't be layered a second time if Confinery itself runs inside another seccomp-user-notification sandbox (the kernel permits only one such filter per thread's lifetime, checked across the whole inherited process ancestry); that case fails closed with an explicit error rather than silently running unfiltered.
 - cgroup limits are skipped without a writable, delegated hierarchy; rlimits still apply.
-- Windows filesystem/network isolation is not implemented, and the Job Object backend does not otherwise restrict privileges: the sandboxed process keeps the full token, group memberships, and filesystem ACL access of the invoking user.
+- Windows filesystem/network isolation is not implemented on the Job Object backend, which does not otherwise restrict privileges either: the sandboxed process keeps the full token, group memberships, and filesystem ACL access of the invoking user.
+- The `wslc` backend is unverified against a real preview install (developed without Windows/WSL-preview access) and only wires flags with strong independent corroboration; resource limits and non-`none` network modes are not enforced by it. Treat it as a starting point, not a finished boundary.
 
 When a layer cannot be applied, Confinery records it in the audit trail and the run report rather than pretending it succeeded.

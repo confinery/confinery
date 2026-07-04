@@ -82,7 +82,7 @@ On Linux, Confinery stacks these layers (see [docs/security-model.md](docs/secur
 | Resources | cgroups v2 + rlimits | 2 GiB, 512 pids, 1024 fds |
 | Identity | user namespace | mapped to an unprivileged user |
 
-On Windows, a Job Object bounds memory and process count, kills the whole tree on exit, and applies UI restrictions; the environment is filtered. Filesystem and network confinement need WSL2 or Windows Sandbox and are reported as not enforced rather than silently skipped.
+On Windows, a Job Object bounds memory and process count, kills the whole tree on exit, and applies UI restrictions; the environment is filtered. Filesystem and network confinement need WSL2, Windows Sandbox, or the experimental `wslc` backend (`windows.container_image` in a profile; see [docs/platform-support.md](docs/platform-support.md#wslc-backend-experimental-preview-dependent)), and are otherwise reported as not enforced rather than silently skipped.
 
 Confinery picks the strongest plan the host supports. Where unprivileged user namespaces exist, it builds a fresh root and network stack (**isolate**). Otherwise it falls back to Landlock, seccomp, rlimits, and capability dropping (**confine**). `confinery doctor` tells you which applies.
 
@@ -146,7 +146,7 @@ CI and signed releases run entirely through GitHub Actions ([.github/workflows](
 
 ## Status
 
-Confinery is young. The Linux backend is complete and tested; the Windows backend covers Job Objects with filesystem/network isolation still to come. Treat it as defence in depth, not a substitute for a VM when running actively hostile code.
+Confinery is young. The Linux backend is complete and tested; the Windows backend covers Job Objects, plus an experimental, unverified `wslc`-backed path for real filesystem/network confinement (see [docs/platform-support.md](docs/platform-support.md#wslc-backend-experimental-preview-dependent)). Treat it as defence in depth, not a substitute for a VM when running actively hostile code.
 
 ## License
 

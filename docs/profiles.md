@@ -109,6 +109,15 @@ Checked against the command's basename before the sandbox starts.
 
 **This is a usability guard, not a security boundary.** It only checks the program named on the command line -- an allowed interpreter (`python3`, `bash`, ...) can still `exec`/spawn anything else once running, unaffected by this list. The syscall, capability, filesystem, and network layers are what actually confine the process; `[tools]` exists to catch "wrong command" mistakes early, not to restrict what a running program can do.
 
+## `[windows]`
+
+```toml
+[windows]
+container_image = "node:20"   # OCI image; unset means the default Job Object backend
+```
+
+Windows-only, harmless elsewhere. Setting `container_image` switches `confinery run` from the Job Object backend to `wslc` (WSL Containers, a Microsoft public preview) -- running the command in a real Linux container instead of natively, with genuine filesystem and network confinement. Only sensible for a command with a Linux build. See [Platform support](platform-support.md#wslc-backend-experimental-preview-dependent) for what's actually enforced and what isn't (short version: mounts and `network.mode = "none"` are real; `[resources]` limits and other network modes are not, pending confirmed CLI flags from this preview).
+
 ## Built-in templates
 
 | Template | For |

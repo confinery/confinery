@@ -112,6 +112,7 @@ pub fn validate(profile: &Profile) -> ValidationReport {
     validate_capabilities(profile, &mut r);
     validate_env(profile, &mut r);
     validate_tools(profile, &mut r);
+    validate_windows(profile, &mut r);
     validate_secret_exposure(profile, &mut r);
 
     r
@@ -357,6 +358,18 @@ fn validate_tools(profile: &Profile, r: &mut ValidationReport) {
     }
 }
 
+fn validate_windows(profile: &Profile, r: &mut ValidationReport) {
+    if let Some(image) = &profile.windows.container_image {
+        if image.trim().is_empty() {
+            r.error(
+                "windows.container_image.empty",
+                "windows.container_image",
+                "set to a real image reference (e.g. \"node:20\"), or remove the key to use the default Job Object backend",
+            );
+        }
+    }
+}
+
 /// Validate a `host:port` endpoint. Accepts IPv6 in brackets.
 fn is_valid_host_port(entry: &str) -> bool {
     let (host, port) = if let Some(rest) = entry.strip_prefix('[') {
@@ -484,5 +497,21 @@ mod tests {
         assert!(report
             .errors()
             .any(|d| d.code == "syscalls.empty_allowlist"));
+    }
+
+    #[test]
+    fn blank_container_image_is_error() {
+        let mut p = Profile::default();
+        p.windows.container_image = Some("  ".into());
+        let report = validate(&p);
+        assert!(report
+            .errors()
+            .any(|d| d.code == "windows.container_image.empty"));
+    }
+
+    #[test]
+    fn unset_container_image_is_valid() {
+        let p = Profile::default();
+        assert!(validate(&p).is_valid());
     }
 }

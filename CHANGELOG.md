@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Experimental `wslc` Windows backend: setting `windows.container_image` in a
+  profile runs the sandboxed command inside a real OCI Linux container via
+  `wslc.exe` (Microsoft's WSL Containers public preview) instead of the Job
+  Object backend, giving genuine filesystem and network confinement.
+  **Unverified against a real preview install** and only wires CLI flags
+  with strong independent corroboration -- resource limits and network
+  modes other than `none` are not enforced by it. See
+  [docs/platform-support.md](docs/platform-support.md#wslc-backend-experimental-preview-dependent).
+
 ## [0.1.0] - 2026-07-04
 
 First public release.

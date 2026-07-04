@@ -45,6 +45,13 @@ impl LayerOutcome {
 #[derive(Debug, Clone)]
 pub struct SandboxReport {
     pub id: String,
+    /// Which concrete backend actually ran this -- not necessarily the
+    /// platform's default: a profile can steer a dispatching backend (e.g.
+    /// Windows' Job Object backend delegating to the `wslc` backend when
+    /// `windows.container_image` is set) to a different one at runtime.
+    /// Prefer this over calling `Sandbox::backend()` on the outer handle
+    /// after the fact, which only reflects the default.
+    pub backend: &'static str,
     /// Process exit code, when it exited normally.
     pub exit_code: Option<i32>,
     /// Terminating signal number, when killed by a signal.
