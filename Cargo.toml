@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/confinery-core", "crates/confinery-sandbox", "crates/confinery"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.82"
 license = "Apache-2.0"
@@ -16,8 +16,8 @@ keywords = ["sandbox", "security", "seccomp", "landlock", "isolation"]
 categories = ["command-line-utilities", "os"]
 
 [workspace.dependencies]
-confinery-core = { path = "crates/confinery-core", version = "0.1.0" }
-confinery-sandbox = { path = "crates/confinery-sandbox", version = "0.1.0" }
+confinery-core = { path = "crates/confinery-core", version = "0.1.1" }
+confinery-sandbox = { path = "crates/confinery-sandbox", version = "0.1.1" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
