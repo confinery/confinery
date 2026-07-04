@@ -122,9 +122,7 @@ jobs:
           cd release
           for f in *.tar.gz *.zip *.cdx.json SHA256SUMS; do
             [ -e "$f" ] || continue
-            cosign sign-blob --yes "$f" \
-              --output-signature "$f.sig" \
-              --output-certificate "$f.pem"
+            cosign sign-blob --yes "$f" --bundle "$f.sigstore.json"
           done
 
       - name: Attest build provenance
@@ -142,7 +140,6 @@ jobs:
             release/*.tar.gz
             release/*.zip
             release/*.cdx.json
-            release/*.sig
-            release/*.pem
+            release/*.sigstore.json
             release/SHA256SUMS
           generate_release_notes: true
