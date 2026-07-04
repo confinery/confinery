@@ -54,7 +54,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p confinery-cli
+        run: cargo build --release --target ${{ matrix.target }} -p confinery
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           cargo cyclonedx --format json --describe binaries --target ${{ matrix.target }}
-          mv crates/confinery-cli/confinery_bin.cdx.json "confinery-${{ matrix.target }}.cdx.json"
+          mv crates/confinery/confinery_bin.cdx.json "confinery-${{ matrix.target }}.cdx.json"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'

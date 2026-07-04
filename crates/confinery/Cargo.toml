@@ -1,5 +1,5 @@
 [package]
-name = "confinery-cli"
+name = "confinery"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

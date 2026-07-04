@@ -1,7 +1,7 @@
 # Confinery
 
 [![CI](https://github.com/confinery/confinery/actions/workflows/ci.yml/badge.svg)](https://github.com/confinery/confinery/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/confinery-cli.svg)](https://crates.io/crates/confinery-cli)
+[![crates.io](https://img.shields.io/crates/v/confinery.svg)](https://crates.io/crates/confinery)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Confinery runs a command inside a locked-down sandbox. It's built for wrapping AI assistants and the tools they invoke, so a coding agent can work in a project without reaching your SSH keys, cloud credentials, or the wider system.
@@ -17,7 +17,7 @@ confinery run -- python3 untrusted_script.py
 
 ```mermaid
 flowchart TD
-    U["User / CI<br/>confinery run"] --> CLI["confinery-cli<br/>parse args · load profile"]
+    U["User / CI<br/>confinery run"] --> CLI["confinery<br/>parse args · load profile"]
     CLI --> CORE["confinery-core<br/>profile · validation · audit · logging"]
     CORE -->|validated policy| SPEC["SandboxSpec<br/>profile + command + options"]
     CLI --> SPEC
@@ -29,20 +29,20 @@ flowchart TD
     WIN --> PROC
 ```
 
-Policy lives in `confinery-core` with no OS calls. `confinery-sandbox` turns it into concrete kernel controls for the current platform. `confinery-cli` is the binary that ties them together. Details in [docs/architecture.md](docs/architecture.md).
+Policy lives in `confinery-core` with no OS calls. `confinery-sandbox` turns it into concrete kernel controls for the current platform. `confinery` is the CLI crate that ties them together and builds the `confinery` binary. Details in [docs/architecture.md](docs/architecture.md).
 
 ## Install
 
 ```
-cargo install confinery-cli
+cargo install confinery
 ```
 
 Or download a signed binary from the [releases page](https://github.com/confinery/confinery/releases), or build from source:
 
 ```
-cargo build --release -p confinery-cli
+cargo build --release -p confinery
 # static Linux binary:
-cargo build --release --target x86_64-unknown-linux-musl -p confinery-cli
+cargo build --release --target x86_64-unknown-linux-musl -p confinery
 ```
 
 The binary is `confinery`.

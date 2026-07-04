@@ -23,7 +23,7 @@ CI runs these on Linux and Windows and will not merge on a failure.
 
 - **Fail closed.** If a layer cannot be applied, report it — never weaken a default to make something work.
 - **Keep the split.** Policy and validation live in `confinery-core` with no OS calls; platform code lives in `confinery-sandbox`. See [docs/architecture.md](docs/architecture.md).
-- **Test what you add.** Unit tests for policy and compilation, integration tests (`crates/confinery-cli/tests`) for behaviour. Isolation tests must degrade gracefully on hosts that lack a feature. Anything parsing untrusted-ish input (profile files, human-friendly sizes/durations) belongs in `crates/confinery-core/fuzz` too -- `cargo install cargo-fuzz && cd crates/confinery-core && cargo +nightly fuzz run <target>`.
+- **Test what you add.** Unit tests for policy and compilation, integration tests (`crates/confinery/tests`) for behaviour. Isolation tests must degrade gracefully on hosts that lack a feature. Anything parsing untrusted-ish input (profile files, human-friendly sizes/durations) belongs in `crates/confinery-core/fuzz` too -- `cargo install cargo-fuzz && cd crates/confinery-core && cargo +nightly fuzz run <target>`.
 - **Least privilege stays the default.** New profile fields need a least-privilege default and a `policy::validate` check.
 - **Docs are terse and honest.** Describe what a layer actually enforces and its limits.
 

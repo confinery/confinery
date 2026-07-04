@@ -3,8 +3,8 @@
 Confinery is a Cargo workspace of three crates. The split keeps the policy model free of platform code, so the same profile drives every backend.
 
 ```
-confinery-core ──► confinery-sandbox ──► confinery-cli (binary: confinery)
-   model                engine                  commands
+confinery-core ──► confinery-sandbox ──► confinery (binary: confinery)
+   model                engine              commands
 ```
 
 ## Crates
@@ -27,11 +27,11 @@ confinery-core ──► confinery-sandbox ──► confinery-cli (binary: conf
 - `windows/` — Job Object backend.
 - `unsupported` — fails closed on other platforms.
 
-**`confinery-cli`** — the `confinery` binary: argument parsing (clap), the `run`, `profile`, `doctor`, and `init` commands, and the embedded profile templates.
+**`confinery`** — the CLI crate, building the `confinery` binary: argument parsing (clap), the `run`, `profile`, `doctor`, and `init` commands, and the embedded profile templates.
 
 ## How a run flows
 
-1. `confinery-cli` loads the profile (or the built-in default) and validates it. Errors stop the run before anything is spawned.
+1. The CLI loads the profile (or the built-in default) and validates it. Errors stop the run before anything is spawned.
 2. It builds a `SandboxSpec` (profile + command + runtime options) and picks an isolation mode from `--isolation` and host detection.
 3. `confinery-sandbox` selects the platform backend and compiles the policy into concrete plans: a seccomp BPF program, a mount layout, a Landlock ruleset, rlimit values, a capability set.
 4. Resource limits that live in the parent (cgroups) are set up, then the child is spawned. A pre-exec hook applies the in-process layers in order and installs seccomp last, immediately before `execve`.
