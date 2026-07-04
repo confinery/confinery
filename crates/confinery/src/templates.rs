@@ -2,9 +2,9 @@
 
 use confinery_core::Profile;
 
-pub const ASSISTANT: &str = include_str!("../../../profiles/assistant.toml");
-pub const STRICT: &str = include_str!("../../../profiles/strict.toml");
-pub const DEV: &str = include_str!("../../../profiles/dev.toml");
+pub const ASSISTANT: &str = include_str!("../templates/assistant.toml");
+pub const STRICT: &str = include_str!("../templates/strict.toml");
+pub const DEV: &str = include_str!("../templates/dev.toml");
 
 /// A named template with a one-line summary.
 pub struct Template {

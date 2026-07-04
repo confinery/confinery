@@ -113,9 +113,9 @@ Checked against the command's basename before the sandbox starts.
 
 | Template | For |
 |----------|-----|
-| `assistant` | balanced sandbox for a coding agent (loopback network by default; see the profile's own comments before switching to `full`) |
+| `assistant` | balanced sandbox for a coding agent (network allowlist for the model API by default; see the profile's own comments) |
 | `strict` | maximum isolation, no network, seccomp allowlist |
 | `dev` | generous limits, loopback network |
 | `minimal` | least-privilege baseline from defaults |
 
-See the shipped examples in [`profiles/`](../profiles).
+See the shipped examples in [`crates/confinery/templates/`](../crates/confinery/templates).

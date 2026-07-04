@@ -57,7 +57,8 @@ confinery doctor
 confinery run -- ./run-tests.sh
 
 # Use a profile and record an audit trail
-confinery run --profile profiles/strict.toml --audit run.jsonl -- python3 job.py
+confinery init strict -o strict.toml
+confinery run --profile strict.toml --audit run.jsonl -- python3 job.py
 
 # Show the plan without executing anything
 confinery run --dry-run -- npm install
