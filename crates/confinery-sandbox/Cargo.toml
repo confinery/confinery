@@ -23,10 +23,10 @@ libc.workspace = true
 seccompiler.workspace = true
 landlock.workspace = true
 caps.workspace = true
-syscalls = { version = "0.6", default-features = false }
+syscalls = { version = "0.8", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
